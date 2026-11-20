@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { uploadFileToDrive } from '../../db/googleDrive';
 import { db } from '../../db/storage';
 import {
-  auth,
+  getCurrentGoogleUser,
   getDriveAccessToken,
   googleSignIn,
   subscribeDriveAccessToken,
@@ -184,7 +184,7 @@ export function MediaInsertDialog({ kind, onClose, onInsert }: MediaInsertDialog
               <div className="flex items-center gap-2 text-xs text-amber-800 dark:text-amber-200">
                 <Cloud className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
                 <span>
-                  {auth.currentUser
+                  {getCurrentGoogleUser()
                     ? 'Reconnect Google Drive first — otherwise media only stays in temporary browser cache.'
                     : 'Connect Google Drive first so media is saved permanently at full quality.'}
                 </span>
@@ -193,7 +193,7 @@ export function MediaInsertDialog({ kind, onClose, onInsert }: MediaInsertDialog
                 label={
                   connectingDrive
                     ? 'Connecting...'
-                    : auth.currentUser
+                    : getCurrentGoogleUser()
                     ? 'Reconnect Drive'
                     : 'Connect Google Drive'
                 }
