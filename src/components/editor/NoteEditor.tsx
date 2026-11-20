@@ -12,6 +12,7 @@ import {
   CheckSquare,
   ChevronLeft,
   ChevronRight,
+  Cloud,
   Copy,
   Download,
   FileUp,
@@ -38,12 +39,13 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { uploadFileToDrive } from '../../db/googleDrive';
-import { getDriveAccessToken } from '../../firebase';
+import { type DriveSaveStatus, uploadFileToDrive } from '../../db/googleDrive';
+import { getDriveAccessToken } from '../../googleAuth';
 import type { CalendarLocale, Folder, Note } from '../../types/workspace';
 import { BUILT_IN_COVERS, MOOD_OPTIONS, QUICK_EMOJIS } from '../../types/workspace';
 import {
   addDaysToKey,
+  formatFileSize,
   formatFullDate,
   formatNumericDate,
   isAutoJournalTitle,
@@ -68,6 +70,10 @@ interface NoteEditorProps {
   folders: Folder[];
   calendarLocale: CalendarLocale;
   saveState: 'saved' | 'saving';
+  driveSaveStatus?: DriveSaveStatus;
+  hasPendingDriveChanges?: boolean;
+  onRequestSaveToDrive?: () => void;
+  onRequestConnectDrive?: () => void;
   rightPanelOpen: boolean;
   onToggleRightPanel: () => void;
   onOpenMobileSidebar: () => void;
@@ -84,6 +90,10 @@ export function NoteEditor({
   folders,
   calendarLocale,
   saveState,
+  driveSaveStatus,
+  hasPendingDriveChanges,
+  onRequestSaveToDrive,
+  onRequestConnectDrive,
   rightPanelOpen,
   onToggleRightPanel,
   onOpenMobileSidebar,
@@ -101,6 +111,10 @@ export function NoteEditor({
       folders={folders}
       calendarLocale={calendarLocale}
       saveState={saveState}
+      driveSaveStatus={driveSaveStatus}
+      hasPendingDriveChanges={hasPendingDriveChanges}
+      onRequestSaveToDrive={onRequestSaveToDrive}
+      onRequestConnectDrive={onRequestConnectDrive}
       rightPanelOpen={rightPanelOpen}
       onToggleRightPanel={onToggleRightPanel}
       onOpenMobileSidebar={onOpenMobileSidebar}
@@ -119,6 +133,10 @@ function NoteEditorCanvas({
   folders,
   calendarLocale,
   saveState,
+  driveSaveStatus = 'disconnected',
+  hasPendingDriveChanges,
+  onRequestSaveToDrive,
+  onRequestConnectDrive,
   rightPanelOpen,
   onToggleRightPanel,
   onOpenMobileSidebar,
@@ -154,6 +172,8 @@ function NoteEditorCanvas({
     rangeToDelete?: { from: number; to: number };
     insertPos?: number;
   } | null>(null);
+  const [pendingCoverFile, setPendingCoverFile] = useState<File | null>(null);
+  const [uploadingCover, setUploadingCover] = useState(false);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const coverInputRef = useRef<HTMLInputElement | null>(null);
@@ -269,31 +289,7 @@ function NoteEditorCanvas({
     setMediaDialog(null);
   };
 
-  const handleUploadCover = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setCoverMenuOpen(false);
-
-    const driveToken = getDriveAccessToken();
-    if (driveToken) {
-      try {
-        const uploaded = await uploadFileToDrive(
-          file,
-          file.name || 'cover-image',
-          file.type || 'image/jpeg',
-          driveToken
-        );
-        onUpdateNote({
-          ...latestNoteRef.current,
-          coverImage: `drive:${uploaded.id}`,
-          updatedAt: new Date().toISOString(),
-        });
-        return;
-      } catch {
-        // Fall through to local/compressed data URL if Drive upload fails
-      }
-    }
-
+  const commitCoverDataUrl = (file: File) => {
     const reader = new FileReader();
     reader.onload = () => {
       const rawUrl = typeof reader.result === 'string' ? reader.result : null;
@@ -326,6 +322,49 @@ function NoteEditorCanvas({
       img.src = rawUrl;
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleConfirmCoverDriveUpload = async () => {
+    if (!pendingCoverFile) return;
+    const driveToken = getDriveAccessToken();
+    if (!driveToken) {
+      commitCoverDataUrl(pendingCoverFile);
+      setPendingCoverFile(null);
+      return;
+    }
+    setUploadingCover(true);
+    try {
+      const uploaded = await uploadFileToDrive(
+        pendingCoverFile,
+        pendingCoverFile.name || 'cover-image',
+        pendingCoverFile.type || 'image/jpeg',
+        driveToken
+      );
+      onUpdateNote({
+        ...latestNoteRef.current,
+        coverImage: `drive:${uploaded.id}`,
+        updatedAt: new Date().toISOString(),
+      });
+      setPendingCoverFile(null);
+    } catch {
+      commitCoverDataUrl(pendingCoverFile);
+      setPendingCoverFile(null);
+    } finally {
+      setUploadingCover(false);
+    }
+  };
+
+  const handleUploadCover = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setCoverMenuOpen(false);
+    e.target.value = '';
+
+    if (getDriveAccessToken()) {
+      setPendingCoverFile(file);
+      return;
+    }
+    commitCoverDataUrl(file);
   };
 
   const handleExportMarkdown = () => {
@@ -437,9 +476,51 @@ function NoteEditorCanvas({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
-          <span className="mr-1.5 hidden sm:inline-flex items-center gap-1 text-xs text-[var(--text-muted)] whitespace-nowrap">
-            {saveState === 'saving' ? 'Saving...' : 'Saved'}
-          </span>
+          {driveSaveStatus === 'disconnected' ? (
+            <button
+              type="button"
+              onClick={onRequestConnectDrive}
+              title="Browser storage is temporary. Connect Google Drive to save permanently."
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 cursor-pointer whitespace-nowrap"
+            >
+              <Cloud className="h-3.5 w-3.5" />
+              Not in Drive · Connect
+            </button>
+          ) : driveSaveStatus === 'saving' || saveState === 'saving' ? (
+            <span className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-2.5 py-1 text-xs text-[var(--text-secondary)] whitespace-nowrap">
+              <Cloud className="h-3.5 w-3.5 animate-pulse text-[var(--accent)]" />
+              Saving to Drive...
+            </span>
+          ) : driveSaveStatus === 'error' ? (
+            <button
+              type="button"
+              onClick={onRequestSaveToDrive}
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-400 hover:bg-red-500/20 cursor-pointer whitespace-nowrap"
+            >
+              <Cloud className="h-3.5 w-3.5" />
+              Drive error · Retry
+            </button>
+          ) : driveSaveStatus === 'manual' || hasPendingDriveChanges ? (
+            <button
+              type="button"
+              onClick={onRequestSaveToDrive}
+              title="Save changes to Google Drive (Ctrl+S)"
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--accent-hover)] cursor-pointer whitespace-nowrap"
+            >
+              <Cloud className="h-3.5 w-3.5" />
+              Save to Drive
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onRequestSaveToDrive}
+              title="All changes auto-saved to Google Drive (Click to save snapshot)"
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/15 cursor-pointer whitespace-nowrap"
+            >
+              <Check className="h-3.5 w-3.5" />
+              Saved to Drive
+            </button>
+          )}
 
           <button
             type="button"
@@ -1165,6 +1246,57 @@ function NoteEditorCanvas({
           onClose={() => setMediaDialog(null)}
           onInsert={handleMediaInsert}
         />
+      )}
+
+      {pendingCoverFile && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]"
+          onClick={() => !uploadingCover && setPendingCoverFile(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-5 shadow-[var(--shadow-popover)] space-y-4"
+          >
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
+                <Upload className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-display text-sm font-semibold text-[var(--text-primary)]">
+                  Upload Cover Image to Google Drive?
+                </h3>
+                <p className="mt-0.5 truncate text-xs text-[var(--text-muted)]">
+                  {pendingCoverFile.name} ({formatFileSize(pendingCoverFile.size)})
+                </p>
+              </div>
+            </div>
+            <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
+              This image will be uploaded at 100% original quality into{' '}
+              <span className="font-medium text-[var(--text-primary)]">
+                Google Drive › Vellum Workspace › Media
+              </span>
+              .
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={uploadingCover}
+                onClick={() => setPendingCoverFile(null)}
+                className="rounded-lg border border-[var(--border-subtle)] px-3.5 py-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={uploadingCover}
+                onClick={handleConfirmCoverDriveUpload}
+                className="rounded-lg bg-[var(--accent)] px-3.5 py-2 text-xs font-medium text-white hover:bg-[var(--accent-hover)] cursor-pointer disabled:opacity-50"
+              >
+                {uploadingCover ? 'Uploading...' : 'Confirm Upload'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

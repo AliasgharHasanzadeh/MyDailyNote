@@ -1,6 +1,8 @@
-import { type User, onAuthStateChanged } from 'firebase/auth';
-import { PanelLeftOpen, Plus, X } from 'lucide-react';
+import { Cloud, PanelLeftOpen, Plus, Upload, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { DriveConfirmDeleteModal } from './components/DriveConfirmDeleteModal';
+import { DriveSyncModal } from './components/DriveSyncModal';
+import { GoogleSignInButton } from './components/GoogleSignInButton';
 import { LeftSidebar } from './components/LeftSidebar';
 import { RightPanel } from './components/RightPanel';
 import { SearchCommandPalette } from './components/SearchCommandPalette';
@@ -12,21 +14,21 @@ import { JournalView } from './components/views/JournalView';
 import { NotesBrowserView } from './components/views/NotesBrowserView';
 import { TasksView } from './components/views/TasksView';
 import {
-  clearKnownCloudIds,
-  cloudDb,
-  ensureUserProfile,
-  seedOrMigrateCloudWorkspace,
-  subscribeCloudWorkspace,
-} from './db/firestoreWorkspace';
-import { clearDriveSessionCaches } from './db/googleDrive';
+  type DriveSaveStatus,
+  type DriveWorkspaceReadResult,
+  clearDriveSessionCaches,
+  readWorkspaceFromDrive,
+  saveWorkspaceToDrive,
+} from './db/googleDrive';
 import { createId, db, seedInitialWorkspaceIfEmpty } from './db/storage';
 import {
-  auth,
+  type GoogleUser,
   getDriveAccessToken,
   googleSignIn,
   googleSignOut,
+  onGoogleAuthChanged,
   subscribeDriveAccessToken,
-} from './firebase';
+} from './googleAuth';
 import type {
   CalendarLocale,
   Folder,
@@ -39,6 +41,9 @@ import type {
 } from './types/workspace';
 import { buildAutoJournalTitle, isAutoJournalTitle, toDateKey } from './utils/date';
 import { EMPTY_DOC } from './utils/tiptap';
+
+const DRIVE_DIRTY_STORAGE_KEY = 'vellum_drive_dirty_v1';
+const DRIVE_LAST_SYNC_KEY = 'vellum_drive_last_sync_v1';
 
 function syncAutoJournalTitles(
   notesList: Note[],
@@ -102,12 +107,37 @@ export default function App() {
     activeFolderId: null,
   });
 
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<GoogleUser | null>(null);
   const [driveConnected, setDriveConnected] = useState<boolean>(() => Boolean(getDriveAccessToken()));
-  const [authReady, setAuthReady] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [syncError, setSyncError] = useState<Error | null>(null);
+
+  const [driveFileId, setDriveFileId] = useState<string | null>(null);
+  const [driveFolderUrl, setDriveFolderUrl] = useState<string | null>(null);
+  const [driveModifiedTime, setDriveModifiedTime] = useState<string | null>(null);
+  const [lastDriveSyncAt, setLastDriveSyncAt] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(DRIVE_LAST_SYNC_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const [hasPendingDriveChanges, setHasPendingDriveChanges] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(DRIVE_DIRTY_STORAGE_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [driveSyncModalMode, setDriveSyncModalMode] = useState<
+    'save' | 'conflict' | 'first_setup' | 'enable_autosave' | null
+  >(null);
+  const [driveAutoSaveEnabled, setDriveAutoSaveEnabled] = useState(false);
+  const [isAutoSavingToDrive, setIsAutoSavingToDrive] = useState(false);
+  const [driveRemoteResult, setDriveRemoteResult] = useState<DriveWorkspaceReadResult | null>(null);
+  const [driveSyncBusy, setDriveSyncBusy] = useState(false);
+  const [driveSyncError, setDriveSyncError] = useState<string | null>(null);
+  const [pendingDeleteNote, setPendingDeleteNote] = useState<Note | null>(null);
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -119,137 +149,132 @@ export default function App() {
   const [quickTaskDate, setQuickTaskDate] = useState(toDateKey());
 
   const saveTimerRef = useRef<number | null>(null);
-  const userRef = useRef<User | null>(null);
-  userRef.current = user;
-  const calendarLocaleRef = useRef<CalendarLocale>(prefs.calendarLocale);
-  calendarLocaleRef.current = prefs.calendarLocale;
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const workspaceRef = useRef({ folders, notes, tasks, goals, prefs });
+  workspaceRef.current = { folders, notes, tasks, goals, prefs };
+  const driveFileIdRef = useRef<string | null>(driveFileId);
+  driveFileIdRef.current = driveFileId;
+  const hasPendingDriveChangesRef = useRef(hasPendingDriveChanges);
+  hasPendingDriveChangesRef.current = hasPendingDriveChanges;
 
-  if (syncError) {
-    throw syncError;
-  }
-
-  const handleCloudFailure = useCallback((err: unknown) => {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message.includes('Quota exceeded')) {
-      setAuthError(
-        'Firestore daily free-tier quota exceeded. Your changes remain saved locally and cloud quota resets tomorrow.'
-      );
-      return;
+  const setDriveDirty = useCallback((dirty: boolean) => {
+    setHasPendingDriveChanges(dirty);
+    try {
+      if (dirty) {
+        localStorage.setItem(DRIVE_DIRTY_STORAGE_KEY, 'true');
+      } else {
+        localStorage.removeItem(DRIVE_DIRTY_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore storage errors
     }
-    setSyncError(err instanceof Error ? err : new Error(message));
+  }, []);
+
+  const recordDriveSyncTime = useCallback((iso: string | null) => {
+    setLastDriveSyncAt(iso);
+    try {
+      if (iso) {
+        localStorage.setItem(DRIVE_LAST_SYNC_KEY, iso);
+      } else {
+        localStorage.removeItem(DRIVE_LAST_SYNC_KEY);
+      }
+    } catch {
+      // Ignore storage errors
+    }
   }, []);
 
   const persistNote = useCallback(
     (note: Note) => {
-      db.saveNote(note);
-      const u = userRef.current;
-      if (u) {
-        return cloudDb.saveNote(u.uid, note).catch(handleCloudFailure);
-      }
-      return Promise.resolve();
+      setDriveDirty(true);
+      return db.saveNote(note);
     },
-    [handleCloudFailure]
+    [setDriveDirty]
   );
 
   const removeNote = useCallback(
     (noteId: string) => {
-      db.deleteNote(noteId);
-      const u = userRef.current;
-      if (u) {
-        cloudDb.deleteNote(u.uid, noteId).catch(handleCloudFailure);
-      }
+      setDriveDirty(true);
+      void db.deleteNote(noteId);
     },
-    [handleCloudFailure]
+    [setDriveDirty]
   );
 
   const persistFolder = useCallback(
     (folder: Folder) => {
-      db.saveFolder(folder);
-      const u = userRef.current;
-      if (u) {
-        cloudDb.saveFolder(u.uid, folder).catch(handleCloudFailure);
-      }
+      setDriveDirty(true);
+      void db.saveFolder(folder);
     },
-    [handleCloudFailure]
+    [setDriveDirty]
   );
 
   const removeFolder = useCallback(
     (folderId: string) => {
-      db.deleteFolder(folderId);
-      const u = userRef.current;
-      if (u) {
-        cloudDb.deleteFolder(u.uid, folderId).catch(handleCloudFailure);
-      }
+      setDriveDirty(true);
+      void db.deleteFolder(folderId);
     },
-    [handleCloudFailure]
+    [setDriveDirty]
   );
 
   const persistTask = useCallback(
     (task: Task) => {
-      db.saveTask(task);
-      const u = userRef.current;
-      if (u) {
-        cloudDb.saveTask(u.uid, task).catch(handleCloudFailure);
-      }
+      setDriveDirty(true);
+      void db.saveTask(task);
     },
-    [handleCloudFailure]
+    [setDriveDirty]
   );
 
   const removeTask = useCallback(
     (taskId: string) => {
-      db.deleteTask(taskId);
-      const u = userRef.current;
-      if (u) {
-        cloudDb.deleteTask(u.uid, taskId).catch(handleCloudFailure);
-      }
+      setDriveDirty(true);
+      void db.deleteTask(taskId);
     },
-    [handleCloudFailure]
+    [setDriveDirty]
   );
 
   const persistGoal = useCallback(
     (goal: Goal) => {
-      db.saveGoal(goal);
-      const u = userRef.current;
-      if (u) {
-        cloudDb.saveGoal(u.uid, goal).catch(handleCloudFailure);
-      }
+      setDriveDirty(true);
+      void db.saveGoal(goal);
     },
-    [handleCloudFailure]
+    [setDriveDirty]
   );
 
   const removeGoal = useCallback(
     (goalId: string) => {
-      db.deleteGoal(goalId);
-      const u = userRef.current;
-      if (u) {
-        cloudDb.deleteGoal(u.uid, goalId).catch(handleCloudFailure);
-      }
+      setDriveDirty(true);
+      void db.deleteGoal(goalId);
     },
-    [handleCloudFailure]
+    [setDriveDirty]
   );
 
   const persistPrefs = useCallback(
-    (nextPrefs: WorkspacePreferences) => {
-      db.savePreferences(nextPrefs);
-      const u = userRef.current;
-      if (u) {
-        cloudDb.savePreferences(u.uid, nextPrefs).catch(handleCloudFailure);
+    (nextPrefs: WorkspacePreferences, markDirty = false) => {
+      if (markDirty) {
+        setDriveDirty(true);
       }
+      void db.savePreferences(nextPrefs);
     },
-    [handleCloudFailure]
+    [setDriveDirty]
   );
 
-  // Firebase Auth & Google Drive access token listeners
+  // Google Auth & Google Drive access token listeners
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
-      setAuthReady(true);
-      if (!firebaseUser) {
+    const unsub = onGoogleAuthChanged((googleUser) => {
+      setUser(googleUser);
+      if (!googleUser) {
         clearDriveSessionCaches();
+        setDriveFileId(null);
+        setDriveFolderUrl(null);
+        setDriveModifiedTime(null);
+        setDriveAutoSaveEnabled(false);
       }
     });
     const unsubDrive = subscribeDriveAccessToken((token) => {
-      setDriveConnected(Boolean(token));
+      const connected = Boolean(token);
+      setDriveConnected(connected);
+      if (!connected) {
+        setDriveAutoSaveEnabled(false);
+      }
     });
     return () => {
       unsub();
@@ -257,90 +282,166 @@ export default function App() {
     };
   }, []);
 
-  // Hydrate from IndexedDB when signed out, or connect Firestore real-time listeners when authenticated
+  // Hydrate workspace from local IndexedDB cache on startup
   useEffect(() => {
-    if (!authReady) return;
     let cancelled = false;
-    let unsubCloud: (() => void) | null = null;
-
     const init = async () => {
       const localData = await seedInitialWorkspaceIfEmpty();
       if (cancelled) return;
+      setFolders(localData.folders);
+      setNotes(
+        syncAutoJournalTitles(localData.notes, localData.preferences.calendarLocale, (n) =>
+          db.saveNote(n)
+        )
+      );
+      setTasks(localData.tasks);
+      setGoals(localData.goals);
+      setPrefs(localData.preferences);
+      setLoading(false);
+    };
+    void init();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-      if (!user) {
-        clearKnownCloudIds();
-        setFolders(localData.folders);
-        setNotes(
-          syncAutoJournalTitles(localData.notes, localData.preferences.calendarLocale, (n) =>
-            db.saveNote(n)
-          )
-        );
-        setTasks(localData.tasks);
-        setGoals(localData.goals);
-        setPrefs(localData.preferences);
-        setLoading(false);
+  const applyDriveSnapshot = useCallback(
+    async (result: DriveWorkspaceReadResult) => {
+      if (!result.data) return;
+      const hydratedNotes = syncAutoJournalTitles(
+        result.data.notes,
+        result.data.preferences.calendarLocale
+      );
+      const nextSnapshot = {
+        folders: result.data.folders,
+        notes: hydratedNotes,
+        tasks: result.data.tasks,
+        goals: result.data.goals,
+        preferences: result.data.preferences,
+      };
+      await db.replaceWorkspace(nextSnapshot);
+      setFolders(nextSnapshot.folders);
+      setNotes(nextSnapshot.notes);
+      setTasks(nextSnapshot.tasks);
+      setGoals(nextSnapshot.goals);
+      setPrefs(nextSnapshot.preferences);
+      setDriveFileId(result.fileId);
+      setDriveFolderUrl(result.folderUrl);
+      setDriveModifiedTime(result.modifiedTime);
+      setDriveDirty(false);
+      recordDriveSyncTime(result.modifiedTime || result.data.updatedAt);
+    },
+    [setDriveDirty, recordDriveSyncTime]
+  );
+
+  const inspectDriveWorkspace = useCallback(
+    async (accessToken: string, forceConflictCheck = false) => {
+      const result = await readWorkspaceFromDrive(accessToken);
+      if (!result || !result.data) {
+        setDriveFileId(result?.fileId || null);
+        setDriveFolderUrl(result?.folderUrl || null);
+        setDriveModifiedTime(null);
+        setDriveRemoteResult(null);
+        setDriveSyncError(null);
+        setDriveSyncModalMode('first_setup');
         return;
       }
 
-      // Authenticated with Firebase: ensure user doc exists, migrate local data if cloud is empty, then attach onSnapshot
-      try {
-        await ensureUserProfile(user);
-        await seedOrMigrateCloudWorkspace(user.uid, localData);
-        if (cancelled) return;
+      setDriveFileId(result.fileId);
+      setDriveFolderUrl(result.folderUrl);
+      setDriveModifiedTime(result.modifiedTime);
+      setDriveRemoteResult(result);
 
-        unsubCloud = subscribeCloudWorkspace(user.uid, {
-          onFolders: (cloudFolders) => {
-            setFolders(cloudFolders);
-            setLoading(false);
-          },
-          onNotes: (cloudNotes) => {
-            setNotes(
-              syncAutoJournalTitles(cloudNotes, calendarLocaleRef.current, (updated) => {
-                cloudDb.saveNote(user.uid, updated).catch(handleCloudFailure);
-              })
-            );
-            setLoading(false);
-          },
-          onTasks: (cloudTasks) => {
-            setTasks(cloudTasks);
-            setLoading(false);
-          },
-          onGoals: (cloudGoals) => {
-            setGoals(cloudGoals);
-            setLoading(false);
-          },
-          onPreferences: (cloudPrefs) => {
-            setPrefs(cloudPrefs);
-            setNotes((prev) =>
-              syncAutoJournalTitles(prev, cloudPrefs.calendarLocale, (updated) => {
-                cloudDb.saveNote(user.uid, updated).catch(handleCloudFailure);
-              })
-            );
-            setLoading(false);
-          },
-          onError: handleCloudFailure,
-        });
-      } catch (err) {
-        if (!cancelled) {
-          handleCloudFailure(err);
-          setLoading(false);
-        }
+      if (hasPendingDriveChangesRef.current || forceConflictCheck) {
+        setDriveSyncError(null);
+        setDriveSyncModalMode('conflict');
+        return;
       }
-    };
 
-    void init();
+      await applyDriveSnapshot(result);
+      setDriveSyncError(null);
+      setDriveSyncModalMode('enable_autosave');
+    },
+    [applyDriveSnapshot]
+  );
+
+  // Live debounced auto-save directly to Google Drive whenever driveAutoSaveEnabled is confirmed
+  useEffect(() => {
+    if (!driveConnected || !driveAutoSaveEnabled || !hasPendingDriveChanges) return;
+    const token = getDriveAccessToken();
+    if (!token) return;
+
+    if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = window.setTimeout(async () => {
+      const activeToken = getDriveAccessToken();
+      if (!activeToken) return;
+      setIsAutoSavingToDrive(true);
+      setDriveSyncError(null);
+      try {
+        const current = workspaceRef.current;
+        const saved = await saveWorkspaceToDrive(
+          {
+            folders: current.folders,
+            notes: current.notes,
+            tasks: current.tasks,
+            goals: current.goals,
+            preferences: current.prefs,
+          },
+          activeToken,
+          driveFileIdRef.current
+        );
+        setDriveFileId(saved.fileId);
+        setDriveFolderUrl(saved.folderUrl);
+        setDriveModifiedTime(saved.modifiedTime);
+        setDriveDirty(false);
+        recordDriveSyncTime(saved.modifiedTime);
+      } catch (error) {
+        setDriveSyncError(
+          error instanceof Error ? error.message : 'Auto-save to Google Drive failed.'
+        );
+      } finally {
+        setIsAutoSavingToDrive(false);
+      }
+    }, 1000);
 
     return () => {
-      cancelled = true;
-      if (unsubCloud) unsubCloud();
+      if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
     };
-  }, [authReady, user, handleCloudFailure]);
+  }, [
+    driveConnected,
+    driveAutoSaveEnabled,
+    hasPendingDriveChanges,
+    folders,
+    notes,
+    tasks,
+    goals,
+    prefs,
+    setDriveDirty,
+    recordDriveSyncTime,
+  ]);
+
+  const driveSaveStatus: DriveSaveStatus = !driveConnected
+    ? 'disconnected'
+    : isAutoSavingToDrive || driveSyncBusy || (driveAutoSaveEnabled && hasPendingDriveChanges)
+    ? 'saving'
+    : driveSyncError
+    ? 'error'
+    : !driveAutoSaveEnabled
+    ? 'manual'
+    : 'saved';
 
   const handleSignIn = useCallback(async () => {
     setAuthError(null);
     setAuthBusy(true);
     try {
-      await googleSignIn();
+      const res = await googleSignIn();
+      if (res.accessToken) {
+        await inspectDriveWorkspace(res.accessToken);
+      } else {
+        setAuthError(
+          'Google Drive permission was not granted. Please try connecting again and allow Google Drive access.'
+        );
+      }
     } catch (error) {
       const code =
         error && typeof error === 'object' && 'code' in error
@@ -348,13 +449,13 @@ export default function App() {
           : '';
       if (code !== 'auth/popup-closed-by-user' && code !== 'auth/cancelled-popup-request') {
         setAuthError(
-          error instanceof Error ? error.message : 'Unable to sign in with Google.'
+          error instanceof Error ? error.message : 'Unable to connect Google Drive.'
         );
       }
     } finally {
       setAuthBusy(false);
     }
-  }, []);
+  }, [inspectDriveWorkspace]);
 
   const handleSignOut = useCallback(async () => {
     setAuthError(null);
@@ -362,13 +463,116 @@ export default function App() {
     try {
       await googleSignOut();
       clearDriveSessionCaches();
-      clearKnownCloudIds();
+      setDriveFileId(null);
+      setDriveFolderUrl(null);
+      setDriveModifiedTime(null);
+      setDriveRemoteResult(null);
+      setDriveAutoSaveEnabled(false);
+      setDriveSyncModalMode(null);
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Unable to sign out.');
     } finally {
       setAuthBusy(false);
     }
   }, []);
+
+  const handleRequestSaveToDrive = useCallback(() => {
+    const token = getDriveAccessToken();
+    if (!token) {
+      void handleSignIn();
+      return;
+    }
+    setDriveSyncError(null);
+    setDriveSyncModalMode('save');
+  }, [handleSignIn]);
+
+  const handleReloadFromDrive = useCallback(async () => {
+    const token = getDriveAccessToken();
+    if (!token) {
+      void handleSignIn();
+      return;
+    }
+    setAuthError(null);
+    setAuthBusy(true);
+    try {
+      await inspectDriveWorkspace(token, hasPendingDriveChangesRef.current);
+    } catch (error) {
+      setAuthError(
+        error instanceof Error ? error.message : 'Failed to reload workspace from Google Drive.'
+      );
+    } finally {
+      setAuthBusy(false);
+    }
+  }, [handleSignIn, inspectDriveWorkspace]);
+
+  const handleConfirmSaveToDrive = useCallback(async () => {
+    const token = getDriveAccessToken();
+    if (!token) {
+      setDriveSyncModalMode(null);
+      void handleSignIn();
+      return;
+    }
+    setDriveSyncBusy(true);
+    setDriveSyncError(null);
+    try {
+      const current = workspaceRef.current;
+      const saved = await saveWorkspaceToDrive(
+        {
+          folders: current.folders,
+          notes: current.notes,
+          tasks: current.tasks,
+          goals: current.goals,
+          preferences: current.prefs,
+        },
+        token,
+        driveFileId
+      );
+      setDriveFileId(saved.fileId);
+      setDriveFolderUrl(saved.folderUrl);
+      setDriveModifiedTime(saved.modifiedTime);
+      setDriveDirty(false);
+      setDriveAutoSaveEnabled(true);
+      recordDriveSyncTime(saved.modifiedTime);
+      setDriveSyncModalMode(null);
+    } catch (error) {
+      setDriveSyncError(
+        error instanceof Error ? error.message : 'Failed to save workspace to Google Drive.'
+      );
+    } finally {
+      setDriveSyncBusy(false);
+    }
+  }, [driveFileId, handleSignIn, setDriveDirty, recordDriveSyncTime]);
+
+  const handleConfirmEnableAutoSave = useCallback(() => {
+    setDriveAutoSaveEnabled(true);
+    setDriveSyncModalMode(null);
+  }, []);
+
+  const handleToggleDriveAutoSave = useCallback(() => {
+    if (driveAutoSaveEnabled) {
+      setDriveAutoSaveEnabled(false);
+    } else {
+      setDriveSyncError(null);
+      setDriveSyncModalMode('save');
+    }
+  }, [driveAutoSaveEnabled]);
+
+  const handleConfirmLoadFromDrive = useCallback(async () => {
+    if (!driveRemoteResult?.data) return;
+    setDriveSyncBusy(true);
+    setDriveSyncError(null);
+    try {
+      await applyDriveSnapshot(driveRemoteResult);
+      setDriveAutoSaveEnabled(true);
+      setDriveSyncModalMode(null);
+    } catch (error) {
+      setDriveSyncError(
+        error instanceof Error ? error.message : 'Failed to load workspace from Google Drive.'
+      );
+    } finally {
+      setDriveSyncBusy(false);
+    }
+  }, [driveRemoteResult, applyDriveSnapshot]);
 
   // Sync theme class on <html>
   useEffect(() => {
@@ -382,9 +586,11 @@ export default function App() {
 
   const updatePrefs = useCallback(
     (patch: Partial<WorkspacePreferences>) => {
+      const isSyncablePrefChange =
+        patch.theme !== undefined || patch.calendarLocale !== undefined;
       setPrefs((prev) => {
         const next = { ...prev, ...patch };
-        persistPrefs(next);
+        persistPrefs(next, isSyncablePrefChange);
         return next;
       });
     },
@@ -462,7 +668,7 @@ export default function App() {
     [updatePrefs, persistNote]
   );
 
-  const handleDeleteNote = useCallback(
+  const executeDeleteNote = useCallback(
     (noteId: string) => {
       setNotes((prev) => prev.filter((n) => n.id !== noteId));
       removeNote(noteId);
@@ -471,6 +677,20 @@ export default function App() {
       }
     },
     [prefs.activeNoteId, updatePrefs, removeNote]
+  );
+
+  const handleDeleteNote = useCallback(
+    (noteId: string) => {
+      if (driveConnected) {
+        const target = notes.find((n) => n.id === noteId);
+        if (target) {
+          setPendingDeleteNote(target);
+          return;
+        }
+      }
+      executeDeleteNote(noteId);
+    },
+    [driveConnected, notes, executeDeleteNote]
   );
 
   const handleSelectNote = useCallback(
@@ -813,6 +1033,9 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setSearchOpen((prev) => !prev);
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        handleRequestSaveToDrive();
       } else if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
         e.preventDefault();
         updatePrefs({ leftSidebarCollapsed: !prefs.leftSidebarCollapsed });
@@ -827,7 +1050,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [prefs, updatePrefs, handleCreateNote]);
+  }, [prefs, updatePrefs, handleCreateNote, handleRequestSaveToDrive]);
 
   const activeNote = useMemo(
     () => notes.find((n) => n.id === prefs.activeNoteId) || null,
@@ -951,9 +1174,14 @@ export default function App() {
           onOpenSearch={() => setSearchOpen(true)}
           user={user}
           driveConnected={driveConnected}
+          driveSaveStatus={driveSaveStatus}
+          driveAutoSaveEnabled={driveAutoSaveEnabled}
+          hasPendingDriveChanges={hasPendingDriveChanges}
           authBusy={authBusy}
           onSignIn={handleSignIn}
           onSignOut={handleSignOut}
+          onRequestSaveToDrive={handleRequestSaveToDrive}
+          onReloadFromDrive={handleReloadFromDrive}
         />
       ) : (
         <>
@@ -1001,9 +1229,14 @@ export default function App() {
               onOpenSearch={() => setSearchOpen(true)}
               user={user}
               driveConnected={driveConnected}
+              driveSaveStatus={driveSaveStatus}
+              driveAutoSaveEnabled={driveAutoSaveEnabled}
+              hasPendingDriveChanges={hasPendingDriveChanges}
               authBusy={authBusy}
               onSignIn={handleSignIn}
               onSignOut={handleSignOut}
+              onRequestSaveToDrive={handleRequestSaveToDrive}
+              onReloadFromDrive={handleReloadFromDrive}
             />
           )}
         </>
@@ -1024,6 +1257,49 @@ export default function App() {
             </button>
           </div>
         )}
+        {!driveConnected && (
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-2.5 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-800 dark:text-amber-200">
+            <span className="flex items-center gap-2 min-w-0">
+              <Cloud className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <span className="truncate">
+                {user
+                  ? 'Google Drive disconnected — browser storage is temporary. Reconnect to load & auto-save your workspace to Drive.'
+                  : 'Google Drive is your primary storage — connect Google Drive to load & auto-save all notes, tasks, goals, and media.'}
+              </span>
+            </span>
+            <GoogleSignInButton
+              label={
+                authBusy
+                  ? 'Connecting...'
+                  : user
+                  ? 'Reconnect Google Drive'
+                  : 'Connect Google Drive'
+              }
+              disabled={authBusy}
+              onClick={handleSignIn}
+            />
+          </div>
+        )}
+        {driveConnected && hasPendingDriveChanges && (!driveAutoSaveEnabled || driveSaveStatus === 'error') && prefs.activeSection !== 'editor' && (
+          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--accent-soft)]/40 px-4 py-1.5 text-xs text-[var(--text-primary)]">
+            <span className="flex items-center gap-2 truncate">
+              <Cloud className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+              <span className="truncate">
+                {driveSaveStatus === 'error'
+                  ? 'Auto-save to Google Drive failed. Retry saving to Vellum Workspace.'
+                  : 'Auto-save to Drive is paused. Save your changes to Google Drive (Vellum Workspace).'}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={handleRequestSaveToDrive}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--accent)] px-2.5 py-1 text-[11px] font-medium text-white hover:bg-[var(--accent-hover)] cursor-pointer"
+            >
+              <Upload className="h-3 w-3" />
+              Save to Drive
+            </button>
+          </div>
+        )}
         <div className="min-h-0 flex-1 overflow-hidden">
         {prefs.activeSection === 'editor' && activeNote ? (
           <NoteEditor
@@ -1031,6 +1307,10 @@ export default function App() {
             folders={folders}
             calendarLocale={prefs.calendarLocale}
             saveState={saveState}
+            driveSaveStatus={driveSaveStatus}
+            hasPendingDriveChanges={hasPendingDriveChanges}
+            onRequestSaveToDrive={handleRequestSaveToDrive}
+            onRequestConnectDrive={handleSignIn}
             rightPanelOpen={prefs.rightSidebarOpen}
             onToggleRightPanel={() =>
               updatePrefs({ rightSidebarOpen: !prefs.rightSidebarOpen })
@@ -1195,13 +1475,66 @@ export default function App() {
         calendarLocale={prefs.calendarLocale}
         user={user}
         driveConnected={driveConnected}
+        driveAutoSaveEnabled={driveAutoSaveEnabled}
+        driveSaveStatus={driveSaveStatus}
+        hasPendingDriveChanges={hasPendingDriveChanges}
+        driveFolderUrl={driveFolderUrl}
+        lastDriveSyncAt={lastDriveSyncAt}
         authBusy={authBusy}
         authError={authError}
         onChangeTheme={(theme) => updatePrefs({ theme })}
         onChangeCalendarLocale={handleChangeCalendarLocale}
         onSignIn={handleSignIn}
         onSignOut={handleSignOut}
+        onToggleDriveAutoSave={handleToggleDriveAutoSave}
+        onRequestSaveToDrive={handleRequestSaveToDrive}
+        onReloadFromDrive={handleReloadFromDrive}
         onClose={() => setSettingsOpen(false)}
+      />
+
+      {/* Explicit Confirmation Modal for Google Drive Workspace Save / Auto-Save / Conflict */}
+      <DriveSyncModal
+        mode={driveSyncModalMode}
+        existingFileId={driveFileId}
+        driveModifiedTime={driveModifiedTime}
+        localStats={{
+          folders: folders.length,
+          notes: notes.length,
+          tasks: tasks.length,
+          goals: goals.length,
+        }}
+        remoteStats={
+          driveRemoteResult?.data
+            ? {
+                folders: driveRemoteResult.data.folders.length,
+                notes: driveRemoteResult.data.notes.length,
+                tasks: driveRemoteResult.data.tasks.length,
+                goals: driveRemoteResult.data.goals.length,
+              }
+            : null
+        }
+        busy={driveSyncBusy}
+        error={driveSyncError}
+        onConfirmSaveToDrive={handleConfirmSaveToDrive}
+        onConfirmEnableAutoSave={handleConfirmEnableAutoSave}
+        onConfirmLoadFromDrive={handleConfirmLoadFromDrive}
+        onCancel={() => {
+          if (!driveSyncBusy) setDriveSyncModalMode(null);
+        }}
+      />
+
+      <DriveConfirmDeleteModal
+        open={Boolean(pendingDeleteNote)}
+        title="Delete note from Google Drive workspace?"
+        description={`"${pendingDeleteNote?.title || 'Untitled'}" will be removed from your workspace and synced to Google Drive (Vellum Workspace).`}
+        confirmLabel="Delete Note"
+        onConfirm={() => {
+          if (pendingDeleteNote) {
+            executeDeleteNote(pendingDeleteNote.id);
+            setPendingDeleteNote(null);
+          }
+        }}
+        onCancel={() => setPendingDeleteNote(null)}
       />
 
       {/* Quick Create Task Modal (from Dashboard) */}

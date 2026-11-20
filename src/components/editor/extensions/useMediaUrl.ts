@@ -8,7 +8,7 @@ import {
   getDriveAccessToken,
   googleSignIn,
   subscribeDriveAccessToken,
-} from '../../../firebase';
+} from '../../../googleAuth';
 
 export function useMediaUrl(
   mediaId?: string | null,

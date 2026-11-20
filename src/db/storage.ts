@@ -178,6 +178,43 @@ export const db = {
     return defaults;
   },
   savePreferences: (prefs: WorkspacePreferences) => putInStore(STORES.preferences, prefs),
+
+  async replaceWorkspace(data: {
+    folders: Folder[];
+    notes: Note[];
+    tasks: Task[];
+    goals: Goal[];
+    preferences: WorkspacePreferences;
+  }): Promise<void> {
+    const idb = await openDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = idb.transaction(
+        [STORES.folders, STORES.notes, STORES.tasks, STORES.goals, STORES.preferences],
+        'readwrite'
+      );
+      tx.objectStore(STORES.folders).clear();
+      tx.objectStore(STORES.notes).clear();
+      tx.objectStore(STORES.tasks).clear();
+      tx.objectStore(STORES.goals).clear();
+
+      const fStore = tx.objectStore(STORES.folders);
+      data.folders.forEach((f) => fStore.put(f));
+
+      const nStore = tx.objectStore(STORES.notes);
+      data.notes.forEach((n) => nStore.put(n));
+
+      const tStore = tx.objectStore(STORES.tasks);
+      data.tasks.forEach((t) => tStore.put(t));
+
+      const gStore = tx.objectStore(STORES.goals);
+      data.goals.forEach((g) => gStore.put(g));
+
+      tx.objectStore(STORES.preferences).put({ ...data.preferences, id: 'default' });
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
 };
 
 export async function seedInitialWorkspaceIfEmpty(): Promise<{

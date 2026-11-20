@@ -7,7 +7,8 @@ import {
   getDriveAccessToken,
   googleSignIn,
   subscribeDriveAccessToken,
-} from '../../firebase';
+} from '../../googleAuth';
+import { formatFileSize } from '../../utils/date';
 import { GoogleSignInButton } from '../GoogleSignInButton';
 import type { MediaKind } from './blockCommands';
 
@@ -57,6 +58,7 @@ export function MediaInsertDialog({ kind, onClose, onInsert }: MediaInsertDialog
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [driveToken, setDriveToken] = useState<string | null>(() => getDriveAccessToken());
@@ -78,9 +80,7 @@ export function MediaInsertDialog({ kind, onClose, onInsert }: MediaInsertDialog
     }
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const commitFileUpload = async (file: File) => {
     setUploadError(null);
     setUploading(true);
     try {
@@ -119,11 +119,21 @@ export function MediaInsertDialog({ kind, onClose, onInsert }: MediaInsertDialog
       }
       onClose();
     } catch (err) {
-      setUploadError(
-        err instanceof Error ? err.message : 'Failed to upload file.'
-      );
+      setUploadError(err instanceof Error ? err.message : 'Failed to upload file.');
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadError(null);
+    if (getDriveAccessToken()) {
+      // Stage for explicit user confirmation before uploading to Google Drive
+      setPendingFile(file);
+    } else {
+      void commitFileUpload(file);
     }
   };
 
@@ -170,17 +180,23 @@ export function MediaInsertDialog({ kind, onClose, onInsert }: MediaInsertDialog
 
         <div className="mt-4 space-y-4">
           {!driveToken && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-3">
-              <div className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-                <Cloud className="h-4 w-4 shrink-0 text-[var(--accent)]" />
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
+              <div className="flex items-center gap-2 text-xs text-amber-800 dark:text-amber-200">
+                <Cloud className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
                 <span>
                   {auth.currentUser
-                    ? 'Reconnect Google Drive to upload at full quality'
-                    : 'Sign in to save files to Google Drive'}
+                    ? 'Reconnect Google Drive first — otherwise media only stays in temporary browser cache.'
+                    : 'Connect Google Drive first so media is saved permanently at full quality.'}
                 </span>
               </div>
               <GoogleSignInButton
-                label={connectingDrive ? 'Connecting...' : auth.currentUser ? 'Connect Drive' : 'Sign in with Google'}
+                label={
+                  connectingDrive
+                    ? 'Connecting...'
+                    : auth.currentUser
+                    ? 'Reconnect Drive'
+                    : 'Connect Google Drive'
+                }
                 disabled={connectingDrive}
                 onClick={handleConnectDrive}
               />
@@ -194,26 +210,61 @@ export function MediaInsertDialog({ kind, onClose, onInsert }: MediaInsertDialog
             onChange={handleFileChange}
             className="hidden"
           />
-          <button
-            type="button"
-            disabled={uploading}
-            onClick={() => fileInputRef.current?.click()}
-            className="flex w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--bg-secondary)]/50 px-4 py-7 text-center transition-colors hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]/30 cursor-pointer disabled:opacity-60"
-          >
-            <Upload className="h-5 w-5 text-[var(--accent)]" />
-            <span className="text-sm font-medium text-[var(--text-primary)]">
-              {uploading
-                ? driveToken
-                  ? 'Uploading original file to Google Drive...'
-                  : 'Saving to workspace...'
-                : 'Upload from your device'}
-            </span>
-            <span className="text-xs text-[var(--text-muted)]">
-              {driveToken
-                ? 'Saved at 100% original quality in your Google Drive'
-                : 'Stored locally in IndexedDB on this browser'}
-            </span>
-          </button>
+
+          {pendingFile ? (
+            <div className="rounded-xl border border-[var(--accent)]/40 bg-[var(--bg-canvas)] p-4 space-y-3">
+              <div className="space-y-1">
+                <div className="text-xs font-semibold text-[var(--text-primary)] truncate">
+                  {pendingFile.name}
+                </div>
+                <div className="text-[11px] text-[var(--text-muted)]">
+                  {formatFileSize(pendingFile.size)} · Upload at 100% original quality to{' '}
+                  <span className="font-medium text-[var(--text-secondary)]">
+                    Google Drive › Vellum Workspace › Media
+                  </span>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={uploading}
+                  onClick={() => {
+                    setPendingFile(null);
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                  }}
+                  className="rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={uploading}
+                  onClick={() => commitFileUpload(pendingFile)}
+                  className="flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3.5 py-1.5 text-xs font-medium text-white hover:bg-[var(--accent-hover)] cursor-pointer disabled:opacity-50"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  {uploading ? 'Uploading...' : 'Confirm Upload & Insert'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => fileInputRef.current?.click()}
+              className="flex w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--bg-secondary)]/50 px-4 py-7 text-center transition-colors hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]/30 cursor-pointer disabled:opacity-60"
+            >
+              <Upload className="h-5 w-5 text-[var(--accent)]" />
+              <span className="text-sm font-medium text-[var(--text-primary)]">
+                {uploading ? 'Saving to temporary cache...' : 'Upload from your device'}
+              </span>
+              <span className="text-xs text-[var(--text-muted)]">
+                {driveToken
+                  ? 'Saves at 100% original quality in Google Drive › Vellum Workspace › Media'
+                  : 'Warning: Drive not connected (temporary browser cache only)'}
+              </span>
+            </button>
+          )}
 
           {uploadError && (
             <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
@@ -221,8 +272,11 @@ export function MediaInsertDialog({ kind, onClose, onInsert }: MediaInsertDialog
             </p>
           )}
 
-          {meta.allowUrl && (
-            <form onSubmit={handleUrlSubmit} className="space-y-3 border-t border-[var(--border-subtle)] pt-4">
+          {meta.allowUrl && !pendingFile && (
+            <form
+              onSubmit={handleUrlSubmit}
+              className="space-y-3 border-t border-[var(--border-subtle)] pt-4"
+            >
               <label className="block text-xs font-medium text-[var(--text-secondary)]">
                 Or embed from URL
               </label>

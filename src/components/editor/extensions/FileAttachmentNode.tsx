@@ -4,7 +4,7 @@ import type { NodeViewProps } from '@tiptap/react';
 import { Cloud, Download, FileText, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { deleteDriveFile } from '../../../db/googleDrive';
-import { getDriveAccessToken } from '../../../firebase';
+import { getDriveAccessToken } from '../../../googleAuth';
 import { formatFileSize } from '../../../utils/date';
 import { DriveConfirmDeleteModal } from '../../DriveConfirmDeleteModal';
 import { useMediaUrl } from './useMediaUrl';

@@ -1,5 +1,18 @@
-import type { User } from 'firebase/auth';
-import { Calendar, Check, Cloud, LogOut, Moon, Settings, Sun, X } from 'lucide-react';
+import {
+  Calendar,
+  Check,
+  Cloud,
+  ExternalLink,
+  LogOut,
+  Moon,
+  RefreshCw,
+  Settings,
+  Sun,
+  Upload,
+  X,
+} from 'lucide-react';
+import type { DriveSaveStatus } from '../db/googleDrive';
+import type { GoogleUser } from '../googleAuth';
 import type { CalendarLocale } from '../types/workspace';
 import { formatFullDate, toDateKey } from '../utils/date';
 import { GoogleSignInButton } from './GoogleSignInButton';
@@ -8,14 +21,22 @@ interface SettingsModalProps {
   open: boolean;
   theme: 'dark' | 'light';
   calendarLocale: CalendarLocale;
-  user: User | null;
+  user: GoogleUser | null;
   driveConnected: boolean;
+  driveAutoSaveEnabled: boolean;
+  driveSaveStatus: DriveSaveStatus;
+  hasPendingDriveChanges: boolean;
+  driveFolderUrl: string | null;
+  lastDriveSyncAt: string | null;
   authBusy: boolean;
   authError: string | null;
   onChangeTheme: (theme: 'dark' | 'light') => void;
   onChangeCalendarLocale: (locale: CalendarLocale) => void;
   onSignIn: () => void;
   onSignOut: () => void;
+  onToggleDriveAutoSave: () => void;
+  onRequestSaveToDrive: () => void;
+  onReloadFromDrive: () => void;
   onClose: () => void;
 }
 
@@ -25,12 +46,20 @@ export function SettingsModal({
   calendarLocale,
   user,
   driveConnected,
+  driveAutoSaveEnabled,
+  driveSaveStatus,
+  hasPendingDriveChanges,
+  driveFolderUrl,
+  lastDriveSyncAt,
   authBusy,
   authError,
   onChangeTheme,
   onChangeCalendarLocale,
   onSignIn,
   onSignOut,
+  onToggleDriveAutoSave,
+  onRequestSaveToDrive,
+  onReloadFromDrive,
   onClose,
 }: SettingsModalProps) {
   if (!open) return null;
@@ -56,7 +85,7 @@ export function SettingsModal({
                 Workspace Settings
               </h2>
               <p className="text-xs text-[var(--text-muted)]">
-                Customize appearance, calendar, and cloud sync
+                Customize appearance, calendar, and primary Google Drive storage
               </p>
             </div>
           </div>
@@ -71,22 +100,26 @@ export function SettingsModal({
         </div>
 
         <div className="mt-5 space-y-6">
-          {/* Cloud Sync (Firebase Firestore + Google Drive Media) */}
+          {/* Primary Google Drive Storage */}
           <section className="space-y-3">
             <div className="flex items-center gap-2">
               <Cloud className="h-4 w-4 text-[var(--accent)]" />
               <div>
                 <h3 className="text-sm font-medium text-[var(--text-primary)]">
-                  Cloud Sync (Firestore + Google Drive)
+                  Primary Storage: Google Drive
                 </h3>
                 <p className="text-xs text-[var(--text-muted)]">
-                  Notes & tasks sync via Firestore; original-quality media files save to Google Drive (Vellum Workspace Media)
+                  All notes, journals, folders, tasks, goals, and original-quality media save directly to{' '}
+                  <span className="font-medium text-[var(--text-secondary)]">
+                    Google Drive › Vellum Workspace
+                  </span>
+                  . Browser storage is only a temporary cache.
                 </p>
               </div>
             </div>
 
             {user ? (
-              <div className="space-y-2.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-3.5">
+              <div className="space-y-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-3.5">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
                     {user.photoURL ? (
@@ -121,15 +154,84 @@ export function SettingsModal({
                   </button>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2.5">
-                  <span className="text-[11px] text-[var(--text-secondary)]">
-                    {driveConnected
-                      ? 'Google Drive connected (100% original-quality media uploads active)'
-                      : 'Drive session token not loaded in memory yet — reconnect to upload or load Drive media'}
-                  </span>
-                  {!driveConnected && (
+                <div className="space-y-2.5 border-t border-[var(--border-subtle)] pt-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <span className="text-[var(--text-secondary)]">
+                      {!driveConnected
+                        ? 'Google Drive disconnected — reconnect to load & auto-save directly to Drive'
+                        : driveSaveStatus === 'saving'
+                        ? 'Saving workspace to Google Drive...'
+                        : driveAutoSaveEnabled && !hasPendingDriveChanges
+                        ? `Auto-save active · Last saved ${
+                            lastDriveSyncAt ? new Date(lastDriveSyncAt).toLocaleString() : 'just now'
+                          }`
+                        : hasPendingDriveChanges
+                        ? 'Pending changes waiting to save to Google Drive.'
+                        : 'Google Drive connected'}
+                    </span>
+                    {driveFolderUrl && (
+                      <a
+                        href={driveFolderUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 font-medium text-[var(--accent)] hover:underline"
+                      >
+                        Open folder
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </div>
+
+                  {driveConnected ? (
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3 py-2">
+                        <div>
+                          <div className="text-xs font-medium text-[var(--text-primary)]">
+                            Auto-Save to Google Drive
+                          </div>
+                          <div className="text-[11px] text-[var(--text-muted)]">
+                            Automatically save changes to Vellum Workspace as you edit
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={onToggleDriveAutoSave}
+                          className={`rounded-lg px-2.5 py-1 text-[11px] font-medium cursor-pointer transition-colors ${
+                            driveAutoSaveEnabled
+                              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
+                              : 'bg-[var(--bg-hover)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'
+                          }`}
+                        >
+                          {driveAutoSaveEnabled ? 'Enabled' : 'Enable'}
+                        </button>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClose();
+                            onRequestSaveToDrive();
+                          }}
+                          className="flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--accent-hover)] cursor-pointer"
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                          Save Now to Drive
+                        </button>
+                        <button
+                          type="button"
+                          onClick={onReloadFromDrive}
+                          disabled={authBusy}
+                          className="flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer disabled:opacity-50"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          Reload from Drive
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
                     <GoogleSignInButton
-                      label={authBusy ? 'Connecting...' : 'Reconnect Drive'}
+                      label={authBusy ? 'Connecting...' : 'Reconnect Google Drive'}
                       disabled={authBusy}
                       onClick={onSignIn}
                     />
@@ -137,12 +239,12 @@ export function SettingsModal({
                 </div>
               </div>
             ) : (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] p-3.5">
-                <div className="text-xs text-[var(--text-secondary)]">
-                  Currently saving locally in this browser (IndexedDB).
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5">
+                <div className="text-xs text-amber-800 dark:text-amber-200">
+                  Google Drive is not connected. Browser storage is temporary — connect Google Drive to store your workspace safely.
                 </div>
                 <GoogleSignInButton
-                  label={authBusy ? 'Connecting...' : 'Sign in with Google'}
+                  label={authBusy ? 'Connecting...' : 'Connect Google Drive'}
                   disabled={authBusy}
                   onClick={onSignIn}
                 />

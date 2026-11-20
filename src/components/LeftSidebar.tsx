@@ -17,16 +17,19 @@ import {
   PanelLeftClose,
   Pin,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   Star,
   Sun,
   Target,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
-import type { User } from 'firebase/auth';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { DriveSaveStatus } from '../db/googleDrive';
+import type { GoogleUser } from '../googleAuth';
 import type { CalendarLocale, Folder, Note, WorkspaceSection } from '../types/workspace';
 import { QUICK_EMOJIS } from '../types/workspace';
 import { formatCompactDate, isAutoJournalTitle } from '../utils/date';
@@ -61,11 +64,16 @@ interface LeftSidebarProps {
   onDuplicateNote: (note: Note) => void;
   onDeleteNote: (noteId: string) => void;
   onOpenSearch: () => void;
-  user: User | null;
+  user: GoogleUser | null;
   driveConnected: boolean;
+  driveSaveStatus: DriveSaveStatus;
+  driveAutoSaveEnabled: boolean;
+  hasPendingDriveChanges: boolean;
   authBusy: boolean;
   onSignIn: () => void;
   onSignOut: () => void;
+  onRequestSaveToDrive: () => void;
+  onReloadFromDrive: () => void;
 }
 
 type ContextTarget =
@@ -103,9 +111,14 @@ export function LeftSidebar({
   onOpenSearch,
   user,
   driveConnected,
+  driveSaveStatus,
+  driveAutoSaveEnabled,
+  hasPendingDriveChanges,
   authBusy,
   onSignIn,
   onSignOut,
+  onRequestSaveToDrive,
+  onReloadFromDrive,
 }: LeftSidebarProps) {
   const [sidebarFilter, setSidebarFilter] = useState('');
   const [contextMenu, setContextMenu] = useState<ContextTarget | null>(null);
@@ -715,23 +728,60 @@ export function LeftSidebar({
                     {user.displayName || user.email}
                   </div>
                   <div className="truncate text-[10px] text-[var(--text-muted)]">
-                    {driveConnected ? 'Firestore + Drive synced' : 'Firestore synced · Reconnect Drive'}
+                    {!driveConnected
+                      ? 'Drive disconnected · Reconnect'
+                      : driveSaveStatus === 'saving'
+                      ? 'Saving to Google Drive...'
+                      : driveSaveStatus === 'error'
+                      ? 'Drive save failed · Retry'
+                      : driveAutoSaveEnabled && !hasPendingDriveChanges
+                      ? 'Auto-saved in Google Drive'
+                      : hasPendingDriveChanges
+                      ? 'Pending save to Drive'
+                      : 'Google Drive connected'}
                   </div>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={onSignOut}
-                disabled={authBusy}
-                title="Sign out"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer disabled:opacity-50"
-              >
-                <LogOut className="h-3.5 w-3.5" />
-              </button>
+              <div className="flex items-center gap-0.5 shrink-0">
+                {driveConnected && (
+                  <button
+                    type="button"
+                    onClick={onReloadFromDrive}
+                    disabled={authBusy}
+                    title="Reload from Google Drive"
+                    className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  disabled={authBusy}
+                  title="Sign out"
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer disabled:opacity-50"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
-            {!driveConnected && (
+            {driveConnected ? (
+              hasPendingDriveChanges && (!driveAutoSaveEnabled || driveSaveStatus === 'error') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onRequestSaveToDrive();
+                    onCloseMobile();
+                  }}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[var(--accent)] px-2.5 py-1.5 text-xs font-medium text-white hover:bg-[var(--accent-hover)] transition-colors cursor-pointer"
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  Save Changes to Drive
+                </button>
+              )
+            ) : (
               <GoogleSignInButton
-                label={authBusy ? 'Connecting...' : 'Reconnect Drive'}
+                label={authBusy ? 'Connecting...' : 'Reconnect Google Drive'}
                 disabled={authBusy}
                 fullWidth
                 onClick={() => {
@@ -743,7 +793,7 @@ export function LeftSidebar({
           </div>
         ) : (
           <GoogleSignInButton
-            label={authBusy ? 'Connecting...' : 'Sign in with Google'}
+            label={authBusy ? 'Connecting...' : 'Connect Google Drive'}
             disabled={authBusy}
             fullWidth
             onClick={() => {
