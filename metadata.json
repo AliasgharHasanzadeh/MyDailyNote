@@ -1,0 +1,8 @@
+{
+  "name": "Vellum",
+  "description": "Personal digital notebook, daily journal, task manager, and goal tracker.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
