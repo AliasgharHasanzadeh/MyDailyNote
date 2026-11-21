@@ -23,6 +23,7 @@ interface SettingsModalProps {
   calendarLocale: CalendarLocale;
   user: GoogleUser | null;
   driveConnected: boolean;
+  driveRestoring?: boolean;
   driveAutoSaveEnabled: boolean;
   driveSaveStatus: DriveSaveStatus;
   hasPendingDriveChanges: boolean;
@@ -46,6 +47,7 @@ export function SettingsModal({
   calendarLocale,
   user,
   driveConnected,
+  driveRestoring = false,
   driveAutoSaveEnabled,
   driveSaveStatus,
   hasPendingDriveChanges,
@@ -157,7 +159,9 @@ export function SettingsModal({
                 <div className="space-y-2.5 border-t border-[var(--border-subtle)] pt-3">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
                     <span className="text-[var(--text-secondary)]">
-                      {!driveConnected
+                      {!driveConnected && driveRestoring
+                        ? 'Restoring Google Drive sync session...'
+                        : !driveConnected
                         ? 'Google Drive disconnected — reconnect to load & auto-save directly to Drive'
                         : driveSaveStatus === 'saving'
                         ? 'Saving workspace to Google Drive...'
@@ -229,13 +233,13 @@ export function SettingsModal({
                         </button>
                       </div>
                     </div>
-                  ) : (
+                  ) : !driveRestoring ? (
                     <GoogleSignInButton
                       label={authBusy ? 'Connecting...' : 'Reconnect Google Drive'}
                       disabled={authBusy}
                       onClick={onSignIn}
                     />
-                  )}
+                  ) : null}
                 </div>
               </div>
             ) : (

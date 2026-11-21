@@ -23,10 +23,12 @@ import {
 import { createId, db, seedInitialWorkspaceIfEmpty } from './db/storage';
 import {
   type GoogleUser,
+  getCurrentGoogleUser,
   getDriveAccessToken,
   googleSignIn,
   googleSignOut,
   onGoogleAuthChanged,
+  silentGoogleSignIn,
   subscribeDriveAccessToken,
 } from './googleAuth';
 import type {
@@ -44,6 +46,7 @@ import { EMPTY_DOC } from './utils/tiptap';
 
 const DRIVE_DIRTY_STORAGE_KEY = 'vellum_drive_dirty_v1';
 const DRIVE_LAST_SYNC_KEY = 'vellum_drive_last_sync_v1';
+const DRIVE_AUTOSAVE_STORAGE_KEY = 'vellum_drive_autosave_v1';
 
 function syncAutoJournalTitles(
   notesList: Note[],
@@ -107,8 +110,12 @@ export default function App() {
     activeFolderId: null,
   });
 
-  const [user, setUser] = useState<GoogleUser | null>(null);
+  const [user, setUser] = useState<GoogleUser | null>(() => getCurrentGoogleUser());
   const [driveConnected, setDriveConnected] = useState<boolean>(() => Boolean(getDriveAccessToken()));
+  const [driveRestoring, setDriveRestoring] = useState<boolean>(() =>
+    Boolean(getCurrentGoogleUser() && !getDriveAccessToken())
+  );
+  const [silentRestoreFailed, setSilentRestoreFailed] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -132,7 +139,16 @@ export default function App() {
   const [driveSyncModalMode, setDriveSyncModalMode] = useState<
     'save' | 'conflict' | 'first_setup' | 'enable_autosave' | null
   >(null);
-  const [driveAutoSaveEnabled, setDriveAutoSaveEnabled] = useState(false);
+  const [driveAutoSaveEnabled, setDriveAutoSaveEnabled] = useState<boolean>(() => {
+    try {
+      return (
+        Boolean(getCurrentGoogleUser()) &&
+        localStorage.getItem(DRIVE_AUTOSAVE_STORAGE_KEY) === 'true'
+      );
+    } catch {
+      return false;
+    }
+  });
   const [isAutoSavingToDrive, setIsAutoSavingToDrive] = useState(false);
   const [driveRemoteResult, setDriveRemoteResult] = useState<DriveWorkspaceReadResult | null>(null);
   const [driveSyncBusy, setDriveSyncBusy] = useState(false);
@@ -156,8 +172,27 @@ export default function App() {
   driveFileIdRef.current = driveFileId;
   const hasPendingDriveChangesRef = useRef(hasPendingDriveChanges);
   hasPendingDriveChangesRef.current = hasPendingDriveChanges;
+  const driveAutoSaveEnabledRef = useRef(driveAutoSaveEnabled);
+  driveAutoSaveEnabledRef.current = driveAutoSaveEnabled;
+  const lastDriveSyncAtRef = useRef<string | null>(lastDriveSyncAt);
+  lastDriveSyncAtRef.current = lastDriveSyncAt;
+
+  const setDriveAutoSave = useCallback((enabled: boolean) => {
+    driveAutoSaveEnabledRef.current = enabled;
+    setDriveAutoSaveEnabled(enabled);
+    try {
+      if (enabled) {
+        localStorage.setItem(DRIVE_AUTOSAVE_STORAGE_KEY, 'true');
+      } else {
+        localStorage.removeItem(DRIVE_AUTOSAVE_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }, []);
 
   const setDriveDirty = useCallback((dirty: boolean) => {
+    hasPendingDriveChangesRef.current = dirty;
     setHasPendingDriveChanges(dirty);
     try {
       if (dirty) {
@@ -171,6 +206,7 @@ export default function App() {
   }, []);
 
   const recordDriveSyncTime = useCallback((iso: string | null) => {
+    lastDriveSyncAtRef.current = iso;
     setLastDriveSyncAt(iso);
     try {
       if (iso) {
@@ -266,21 +302,24 @@ export default function App() {
         setDriveFileId(null);
         setDriveFolderUrl(null);
         setDriveModifiedTime(null);
-        setDriveAutoSaveEnabled(false);
+        setDriveAutoSave(false);
+        setSilentRestoreFailed(false);
+        setDriveRestoring(false);
       }
     });
     const unsubDrive = subscribeDriveAccessToken((token) => {
       const connected = Boolean(token);
       setDriveConnected(connected);
-      if (!connected) {
-        setDriveAutoSaveEnabled(false);
+      if (connected) {
+        setDriveRestoring(false);
+        setSilentRestoreFailed(false);
       }
     });
     return () => {
       unsub();
       unsubDrive();
     };
-  }, []);
+  }, [setDriveAutoSave]);
 
   // Hydrate workspace from local IndexedDB cache on startup
   useEffect(() => {
@@ -335,7 +374,7 @@ export default function App() {
   );
 
   const inspectDriveWorkspace = useCallback(
-    async (accessToken: string, forceConflictCheck = false) => {
+    async (accessToken: string, forceConflictCheck = false, isAutoRestore = false) => {
       const result = await readWorkspaceFromDrive(accessToken);
       if (!result || !result.data) {
         setDriveFileId(result?.fileId || null);
@@ -343,7 +382,9 @@ export default function App() {
         setDriveModifiedTime(null);
         setDriveRemoteResult(null);
         setDriveSyncError(null);
-        setDriveSyncModalMode('first_setup');
+        if (!isAutoRestore) {
+          setDriveSyncModalMode('first_setup');
+        }
         return;
       }
 
@@ -351,6 +392,28 @@ export default function App() {
       setDriveFolderUrl(result.folderUrl);
       setDriveModifiedTime(result.modifiedTime);
       setDriveRemoteResult(result);
+
+      const remoteMatchesLastSync = Boolean(
+        result.modifiedTime &&
+          lastDriveSyncAtRef.current &&
+          result.modifiedTime === lastDriveSyncAtRef.current
+      );
+
+      if (!forceConflictCheck && driveAutoSaveEnabledRef.current) {
+        if (hasPendingDriveChangesRef.current) {
+          if (remoteMatchesLastSync) {
+            // Local edits are strictly newer than the untouched Drive snapshot; let auto-save flush them cleanly
+            setDriveSyncError(null);
+            return;
+          }
+          setDriveSyncError(null);
+          setDriveSyncModalMode('conflict');
+          return;
+        }
+        await applyDriveSnapshot(result);
+        setDriveSyncError(null);
+        return;
+      }
 
       if (hasPendingDriveChangesRef.current || forceConflictCheck) {
         setDriveSyncError(null);
@@ -360,10 +423,52 @@ export default function App() {
 
       await applyDriveSnapshot(result);
       setDriveSyncError(null);
-      setDriveSyncModalMode('enable_autosave');
+      if (!isAutoRestore) {
+        setDriveSyncModalMode('enable_autosave');
+      }
     },
     [applyDriveSnapshot]
   );
+
+  // Silently restore Google Drive session across page reloads when user previously signed in
+  useEffect(() => {
+    if (loading) return;
+    const remembered = getCurrentGoogleUser();
+    if (!remembered || getDriveAccessToken()) {
+      setDriveRestoring(false);
+      return;
+    }
+
+    let cancelled = false;
+    setDriveRestoring(true);
+
+    const restore = async () => {
+      try {
+        const res = await silentGoogleSignIn();
+        if (cancelled) return;
+        if (res?.accessToken) {
+          setSilentRestoreFailed(false);
+          await inspectDriveWorkspace(res.accessToken, false, true);
+        } else {
+          setSilentRestoreFailed(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setSilentRestoreFailed(true);
+        }
+      } finally {
+        if (!cancelled) {
+          setDriveRestoring(false);
+        }
+      }
+    };
+
+    void restore();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, inspectDriveWorkspace]);
 
   // Live debounced auto-save directly to Google Drive whenever driveAutoSaveEnabled is confirmed
   useEffect(() => {
@@ -377,7 +482,7 @@ export default function App() {
       if (!activeToken) return;
       setIsAutoSavingToDrive(true);
       setDriveSyncError(null);
-      try {
+      const persistSnapshot = async (tok: string) => {
         const current = workspaceRef.current;
         const saved = await saveWorkspaceToDrive(
           {
@@ -387,7 +492,7 @@ export default function App() {
             goals: current.goals,
             preferences: current.prefs,
           },
-          activeToken,
+          tok,
           driveFileIdRef.current
         );
         setDriveFileId(saved.fileId);
@@ -395,7 +500,25 @@ export default function App() {
         setDriveModifiedTime(saved.modifiedTime);
         setDriveDirty(false);
         recordDriveSyncTime(saved.modifiedTime);
+      };
+
+      try {
+        await persistSnapshot(activeToken);
       } catch (error) {
+        if (!getDriveAccessToken()) {
+          const refreshed = await silentGoogleSignIn();
+          if (refreshed?.accessToken) {
+            try {
+              await persistSnapshot(refreshed.accessToken);
+              return;
+            } catch (retryErr) {
+              setDriveSyncError(
+                retryErr instanceof Error ? retryErr.message : 'Auto-save to Google Drive failed.'
+              );
+              return;
+            }
+          }
+        }
         setDriveSyncError(
           error instanceof Error ? error.message : 'Auto-save to Google Drive failed.'
         );
@@ -467,14 +590,17 @@ export default function App() {
       setDriveFolderUrl(null);
       setDriveModifiedTime(null);
       setDriveRemoteResult(null);
-      setDriveAutoSaveEnabled(false);
+      setDriveAutoSave(false);
+      recordDriveSyncTime(null);
+      setSilentRestoreFailed(false);
+      setDriveRestoring(false);
       setDriveSyncModalMode(null);
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Unable to sign out.');
     } finally {
       setAuthBusy(false);
     }
-  }, []);
+  }, [setDriveAutoSave, recordDriveSyncTime]);
 
   const handleRequestSaveToDrive = useCallback(() => {
     const token = getDriveAccessToken();
@@ -531,7 +657,7 @@ export default function App() {
       setDriveFolderUrl(saved.folderUrl);
       setDriveModifiedTime(saved.modifiedTime);
       setDriveDirty(false);
-      setDriveAutoSaveEnabled(true);
+      setDriveAutoSave(true);
       recordDriveSyncTime(saved.modifiedTime);
       setDriveSyncModalMode(null);
     } catch (error) {
@@ -541,21 +667,21 @@ export default function App() {
     } finally {
       setDriveSyncBusy(false);
     }
-  }, [driveFileId, handleSignIn, setDriveDirty, recordDriveSyncTime]);
+  }, [driveFileId, handleSignIn, setDriveDirty, setDriveAutoSave, recordDriveSyncTime]);
 
   const handleConfirmEnableAutoSave = useCallback(() => {
-    setDriveAutoSaveEnabled(true);
+    setDriveAutoSave(true);
     setDriveSyncModalMode(null);
-  }, []);
+  }, [setDriveAutoSave]);
 
   const handleToggleDriveAutoSave = useCallback(() => {
     if (driveAutoSaveEnabled) {
-      setDriveAutoSaveEnabled(false);
+      setDriveAutoSave(false);
     } else {
       setDriveSyncError(null);
       setDriveSyncModalMode('save');
     }
-  }, [driveAutoSaveEnabled]);
+  }, [driveAutoSaveEnabled, setDriveAutoSave]);
 
   const handleConfirmLoadFromDrive = useCallback(async () => {
     if (!driveRemoteResult?.data) return;
@@ -563,7 +689,7 @@ export default function App() {
     setDriveSyncError(null);
     try {
       await applyDriveSnapshot(driveRemoteResult);
-      setDriveAutoSaveEnabled(true);
+      setDriveAutoSave(true);
       setDriveSyncModalMode(null);
     } catch (error) {
       setDriveSyncError(
@@ -572,7 +698,7 @@ export default function App() {
     } finally {
       setDriveSyncBusy(false);
     }
-  }, [driveRemoteResult, applyDriveSnapshot]);
+  }, [driveRemoteResult, applyDriveSnapshot, setDriveAutoSave]);
 
   // Sync theme class on <html>
   useEffect(() => {
@@ -1174,6 +1300,7 @@ export default function App() {
           onOpenSearch={() => setSearchOpen(true)}
           user={user}
           driveConnected={driveConnected}
+          driveRestoring={driveRestoring}
           driveSaveStatus={driveSaveStatus}
           driveAutoSaveEnabled={driveAutoSaveEnabled}
           hasPendingDriveChanges={hasPendingDriveChanges}
@@ -1229,6 +1356,7 @@ export default function App() {
               onOpenSearch={() => setSearchOpen(true)}
               user={user}
               driveConnected={driveConnected}
+              driveRestoring={driveRestoring}
               driveSaveStatus={driveSaveStatus}
               driveAutoSaveEnabled={driveAutoSaveEnabled}
               hasPendingDriveChanges={hasPendingDriveChanges}
@@ -1257,12 +1385,24 @@ export default function App() {
             </button>
           </div>
         )}
-        {!driveConnected && (
+        {!driveConnected && driveRestoring && (
+          <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] px-4 py-1.5 text-xs text-[var(--text-secondary)]">
+            <Cloud className="h-3.5 w-3.5 shrink-0 animate-pulse text-[var(--accent)]" />
+            <span className="truncate">
+              Restoring Google Drive sync for {user?.email || user?.displayName || 'your account'}...
+            </span>
+          </div>
+        )}
+        {!driveConnected && !driveRestoring && (
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-2.5 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-800 dark:text-amber-200">
             <span className="flex items-center gap-2 min-w-0">
               <Cloud className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
               <span className="truncate">
-                {user
+                {user && silentRestoreFailed
+                  ? `Google Drive sync paused (browser blocked silent refresh). Click Reconnect to resume auto-sync for ${
+                      user.email || 'your account'
+                    }.`
+                  : user
                   ? 'Google Drive disconnected — browser storage is temporary. Reconnect to load & auto-save your workspace to Drive.'
                   : 'Google Drive is your primary storage — connect Google Drive to load & auto-save all notes, tasks, goals, and media.'}
               </span>
@@ -1475,6 +1615,7 @@ export default function App() {
         calendarLocale={prefs.calendarLocale}
         user={user}
         driveConnected={driveConnected}
+        driveRestoring={driveRestoring}
         driveAutoSaveEnabled={driveAutoSaveEnabled}
         driveSaveStatus={driveSaveStatus}
         hasPendingDriveChanges={hasPendingDriveChanges}

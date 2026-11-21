@@ -66,6 +66,7 @@ interface LeftSidebarProps {
   onOpenSearch: () => void;
   user: GoogleUser | null;
   driveConnected: boolean;
+  driveRestoring?: boolean;
   driveSaveStatus: DriveSaveStatus;
   driveAutoSaveEnabled: boolean;
   hasPendingDriveChanges: boolean;
@@ -111,6 +112,7 @@ export function LeftSidebar({
   onOpenSearch,
   user,
   driveConnected,
+  driveRestoring = false,
   driveSaveStatus,
   driveAutoSaveEnabled,
   hasPendingDriveChanges,
@@ -850,7 +852,9 @@ export function LeftSidebar({
                     {user.displayName || user.email}
                   </div>
                   <div className="truncate text-[10px] text-[var(--text-muted)]">
-                    {!driveConnected
+                    {!driveConnected && driveRestoring
+                      ? 'Restoring Drive sync...'
+                      : !driveConnected
                       ? 'Drive disconnected · Reconnect'
                       : driveSaveStatus === 'saving'
                       ? 'Saving to Google Drive...'
@@ -901,7 +905,7 @@ export function LeftSidebar({
                   Save Changes to Drive
                 </button>
               )
-            ) : (
+            ) : !driveRestoring ? (
               <GoogleSignInButton
                 label={authBusy ? 'Connecting...' : 'Reconnect Google Drive'}
                 disabled={authBusy}
@@ -911,7 +915,7 @@ export function LeftSidebar({
                   onCloseMobile();
                 }}
               />
-            )}
+            ) : null}
           </div>
         ) : (
           <GoogleSignInButton
