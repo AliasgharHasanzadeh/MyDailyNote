@@ -644,7 +644,7 @@ export function TasksView({
                   >
                     <option value="">None</option>
                     {notes
-                      .filter((n) => !n.isArchived)
+                      .filter((n) => !n.isArchived && !n.deletedAt)
                       .map((n) => (
                         <option key={n.id} value={n.id}>
                           {n.icon || '📄'} {n.title || 'Untitled'}

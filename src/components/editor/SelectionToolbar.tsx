@@ -37,12 +37,13 @@ export function SelectionToolbar({ editor }: SelectionToolbarProps) {
         return;
       }
 
-      // Avoid showing over atom media nodes
+      // Avoid showing over atom media or terminal nodes
       if (
         editor.isActive('mediaImage') ||
         editor.isActive('audioBlock') ||
         editor.isActive('videoBlock') ||
-        editor.isActive('fileAttachment')
+        editor.isActive('fileAttachment') ||
+        editor.isActive('terminalBlock')
       ) {
         setCoords(null);
         return;

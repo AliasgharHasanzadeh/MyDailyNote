@@ -39,7 +39,7 @@ export function SearchCommandPalette({
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
     const matchedNotes = notes
-      .filter((n) => !n.isArchived)
+      .filter((n) => !n.isArchived && !n.deletedAt)
       .filter(
         (n) =>
           !q ||

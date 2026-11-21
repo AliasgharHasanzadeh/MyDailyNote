@@ -154,8 +154,10 @@ export const db = {
   async getPreferences(): Promise<WorkspacePreferences> {
     const existing = await getFromStore<WorkspacePreferences>(STORES.preferences, 'default');
     if (existing) {
+      const validThemes = new Set(['light', 'dark', 'cybery', 'pink']);
       return {
         ...existing,
+        theme: validThemes.has(existing.theme) ? existing.theme : 'dark',
         calendarLocale: existing.calendarLocale || 'en',
         leftSidebarWidth: existing.leftSidebarWidth || 272,
       };

@@ -275,3 +275,105 @@ export function formatDuration(seconds: number): string {
   const secs = Math.floor(seconds % 60);
   return `${mins}:${String(secs).padStart(2, '0')}`;
 }
+
+export const TRASH_RETENTION_DAYS = 30;
+export const TRASH_RETENTION_MS = TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+export function isTrashExpired(deletedAt?: string | null, nowMs = Date.now()): boolean {
+  if (!deletedAt) return false;
+  const deletedMs = Date.parse(deletedAt);
+  if (Number.isNaN(deletedMs)) return false;
+  return nowMs - deletedMs >= TRASH_RETENTION_MS;
+}
+
+export interface TrashRemainingInfo {
+  remainingMs: number;
+  daysLeft: number;
+  urgency: 'normal' | 'soon' | 'critical';
+  label: string;
+}
+
+export function getTrashRemainingInfo(
+  deletedAt: string,
+  locale: CalendarLocale = 'en',
+  nowMs = Date.now()
+): TrashRemainingInfo {
+  const deletedMs = Date.parse(deletedAt);
+  const expiresAt = Number.isNaN(deletedMs) ? nowMs : deletedMs + TRASH_RETENTION_MS;
+  const remainingMs = Math.max(0, expiresAt - nowMs);
+  const totalMinutes = Math.floor(remainingMs / 60000);
+  const days = Math.floor(totalMinutes / (60 * 24));
+  const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
+  const mins = totalMinutes % 60;
+  const daysLeft = Math.ceil(remainingMs / (24 * 60 * 60 * 1000));
+  const urgency: TrashRemainingInfo['urgency'] =
+    remainingMs <= 2 * 24 * 60 * 60 * 1000
+      ? 'critical'
+      : remainingMs <= 7 * 24 * 60 * 60 * 1000
+      ? 'soon'
+      : 'normal';
+
+  if (remainingMs <= 0) {
+    return {
+      remainingMs: 0,
+      daysLeft: 0,
+      urgency: 'critical',
+      label: locale === 'fa' ? 'در حال حذف خودکار' : 'Expiring soon',
+    };
+  }
+
+  if (locale === 'fa') {
+    if (days >= 1) {
+      return {
+        remainingMs,
+        daysLeft,
+        urgency,
+        label:
+          hours > 0
+            ? `${toPersianDigits(days)} روز و ${toPersianDigits(hours)} ساعت مانده`
+            : `${toPersianDigits(days)} روز مانده`,
+      };
+    }
+    if (hours >= 1) {
+      return {
+        remainingMs,
+        daysLeft,
+        urgency,
+        label:
+          mins > 0
+            ? `${toPersianDigits(hours)} ساعت و ${toPersianDigits(mins)} دقیقه مانده`
+            : `${toPersianDigits(hours)} ساعت مانده`,
+      };
+    }
+    return {
+      remainingMs,
+      daysLeft,
+      urgency,
+      label: `${toPersianDigits(Math.max(1, mins))} دقیقه مانده`,
+    };
+  }
+
+  if (days >= 1) {
+    return {
+      remainingMs,
+      daysLeft,
+      urgency,
+      label: hours > 0 ? `${days}d ${hours}h left` : `${days}d left`,
+    };
+  }
+  if (hours >= 1) {
+    return {
+      remainingMs,
+      daysLeft,
+      urgency,
+      label: mins > 0 ? `${hours}h ${mins}m left` : `${hours}h left`,
+    };
+  }
+  return {
+    remainingMs,
+    daysLeft,
+    urgency,
+    label: `${Math.max(1, mins)}m left`,
+  };
+}
+

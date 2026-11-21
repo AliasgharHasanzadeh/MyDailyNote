@@ -1,13 +1,14 @@
 import type { Editor } from '@tiptap/react';
 import { ArrowDown, ArrowUp, Copy, GripVertical, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { BLOCK_COMMANDS } from './blockCommands';
+import { BLOCK_CATEGORY_META, BLOCK_COMMANDS } from './blockCommands';
 import type { BlockCommandItem, MediaKind } from './blockCommands';
 
 interface BlockGutterProps {
   editor: Editor | null;
   containerRef: React.RefObject<HTMLDivElement | null>;
   onRequestMediaAtPos: (kind: MediaKind, insertPos: number) => void;
+  onRequestLinkAtPos: (insertPos: number) => void;
 }
 
 interface HoveredBlock {
@@ -17,7 +18,12 @@ interface HoveredBlock {
   endPos: number;
 }
 
-export function BlockGutter({ editor, containerRef, onRequestMediaAtPos }: BlockGutterProps) {
+export function BlockGutter({
+  editor,
+  containerRef,
+  onRequestMediaAtPos,
+  onRequestLinkAtPos,
+}: BlockGutterProps) {
   const [hovered, setHovered] = useState<HoveredBlock | null>(null);
   const [insertMenuOpen, setInsertMenuOpen] = useState(false);
   const [blockMenuOpen, setBlockMenuOpen] = useState(false);
@@ -195,6 +201,11 @@ export function BlockGutter({ editor, containerRef, onRequestMediaAtPos }: Block
       return;
     }
 
+    if (cmd.actionKind === 'link') {
+      onRequestLinkAtPos(insertPos);
+      return;
+    }
+
     // Insert an empty paragraph at endPos and convert/execute command inside it
     editor
       .chain()
@@ -250,22 +261,33 @@ export function BlockGutter({ editor, containerRef, onRequestMediaAtPos }: Block
           </button>
 
           {insertMenuOpen && (
-            <div className="absolute left-0 top-7 z-40 w-64 max-h-72 overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-1.5 shadow-[var(--shadow-popover)]">
-              <div className="px-2 py-1 text-[11px] font-medium text-[var(--text-muted)]">
-                Insert below block
-              </div>
-              {BLOCK_COMMANDS.map((cmd) => {
-                const Icon = cmd.icon;
+            <div className="absolute left-0 top-7 z-40 w-64 max-h-80 overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-1.5 shadow-[var(--shadow-popover)] space-y-1.5">
+              {BLOCK_CATEGORY_META.map((cat, idx) => {
+                const items = BLOCK_COMMANDS.filter((cmd) => cmd.category === cat.id);
+                if (items.length === 0) return null;
                 return (
-                  <button
-                    key={cmd.id}
-                    type="button"
-                    onClick={() => insertAfterBlock(cmd)}
-                    className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+                  <div
+                    key={cat.id}
+                    className={idx > 0 ? 'border-t border-[var(--border-subtle)] pt-1.5' : ''}
                   >
-                    <Icon className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate font-medium">{cmd.label}</span>
-                  </button>
+                    <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                      {cat.label}
+                    </div>
+                    {items.map((cmd) => {
+                      const Icon = cmd.icon;
+                      return (
+                        <button
+                          key={cmd.id}
+                          type="button"
+                          onClick={() => insertAfterBlock(cmd)}
+                          className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+                        >
+                          <Icon className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate font-medium">{cmd.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 );
               })}
             </div>

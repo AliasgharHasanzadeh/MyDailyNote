@@ -1,14 +1,15 @@
 import type { Editor } from '@tiptap/react';
 import { useEffect, useMemo, useState } from 'react';
-import { BLOCK_COMMANDS } from './blockCommands';
+import { BLOCK_CATEGORY_META, BLOCK_COMMANDS } from './blockCommands';
 import type { BlockCommandItem, MediaKind } from './blockCommands';
 
 interface SlashMenuProps {
   editor: Editor | null;
   onRequestMedia: (kind: MediaKind, rangeToDelete?: { from: number; to: number }) => void;
+  onRequestLink: (rangeToDelete?: { from: number; to: number }) => void;
 }
 
-export function SlashMenu({ editor, onRequestMedia }: SlashMenuProps) {
+export function SlashMenu({ editor, onRequestMedia, onRequestLink }: SlashMenuProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -79,6 +80,12 @@ export function SlashMenu({ editor, onRequestMedia }: SlashMenuProps) {
       onRequestMedia(cmd.mediaKind, currentRange);
       return;
     }
+    if (cmd.actionKind === 'link') {
+      const currentRange = { ...range };
+      setOpen(false);
+      onRequestLink(currentRange);
+      return;
+    }
     editor.chain().focus().deleteRange(range).run();
     cmd.execute(editor);
     setOpen(false);
@@ -113,34 +120,45 @@ export function SlashMenu({ editor, onRequestMedia }: SlashMenuProps) {
     <div
       style={{ top: coords.top, left: coords.left }}
       onMouseDown={(e) => e.preventDefault()}
-      className="fixed z-40 w-68 max-h-76 overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-1.5 shadow-[var(--shadow-popover)]"
+      className="fixed z-40 w-72 max-h-80 overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-1.5 shadow-[var(--shadow-popover)]"
     >
-      <div className="px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-muted)]">
-        Insert block
-      </div>
-      {filtered.map((cmd, idx) => {
-        const Icon = cmd.icon;
-        const active = idx === selectedIndex;
+      {BLOCK_CATEGORY_META.map((cat) => {
+        const items = filtered.filter((cmd) => cmd.category === cat.id);
+        if (items.length === 0) return null;
         return (
-          <button
-            key={cmd.id}
-            type="button"
-            onClick={() => runCommand(cmd)}
-            onMouseEnter={() => setSelectedIndex(idx)}
-            className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors cursor-pointer ${
-              active
-                ? 'bg-[var(--accent-soft)] text-[var(--text-primary)]'
-                : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
-            }`}
-          >
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-              <Icon className="h-3.5 w-3.5" />
+          <div key={cat.id} className="mb-1 last:mb-0">
+            <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+              {cat.label}
             </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-xs font-medium text-[var(--text-primary)]">{cmd.label}</div>
-              <div className="truncate text-[11px] text-[var(--text-muted)]">{cmd.description}</div>
-            </div>
-          </button>
+            {items.map((cmd) => {
+              const Icon = cmd.icon;
+              const flatIdx = filtered.indexOf(cmd);
+              const active = flatIdx === selectedIndex;
+              return (
+                <button
+                  key={cmd.id}
+                  type="button"
+                  onClick={() => runCommand(cmd)}
+                  onMouseEnter={() => setSelectedIndex(flatIdx)}
+                  className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors cursor-pointer ${
+                    active
+                      ? 'bg-[var(--accent-soft)] text-[var(--text-primary)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
+                  }`}
+                >
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+                    <Icon className="h-3.5 w-3.5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium text-[var(--text-primary)]">{cmd.label}</div>
+                    <div className="truncate text-[11px] text-[var(--text-muted)]">
+                      {cmd.description}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         );
       })}
     </div>

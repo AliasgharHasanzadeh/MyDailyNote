@@ -12,6 +12,7 @@ import {
   Calendar,
   Check,
   CheckSquare,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Cloud,
@@ -22,6 +23,7 @@ import {
   Heading2,
   Image as ImageIcon,
   Lightbulb,
+  Link2,
   List,
   Menu,
   Minus,
@@ -54,19 +56,22 @@ import {
   toDateKey,
 } from '../../utils/date';
 import { extractPlainText, noteToMarkdown } from '../../utils/tiptap';
-import { BLOCK_COMMANDS } from './blockCommands';
-import type { MediaKind } from './blockCommands';
+import { BLOCK_CATEGORY_META, BLOCK_COMMANDS } from './blockCommands';
+import type { BlockCategory, BlockCommandItem, MediaKind } from './blockCommands';
 import { BlockGutter } from './BlockGutter';
 import { AudioNode } from './extensions/AudioNode';
 import { CalloutNode } from './extensions/CalloutNode';
 import { FileAttachmentNode } from './extensions/FileAttachmentNode';
 import { MediaImageNode } from './extensions/MediaImageNode';
+import { TerminalNode } from './extensions/TerminalNode';
 import {
   TextDirectionExtension,
   getActiveBlockDirection,
 } from './extensions/TextDirectionExtension';
 import { useResolvedCoverUrl } from './extensions/useMediaUrl';
 import { VideoNode } from './extensions/VideoNode';
+import { LinkHoverPopover } from './LinkHoverPopover';
+import { LinkInsertDialog } from './LinkInsertDialog';
 import { MediaInsertDialog } from './MediaInsertDialog';
 import { SelectionToolbar } from './SelectionToolbar';
 import { SlashMenu } from './SlashMenu';
@@ -166,6 +171,12 @@ function NoteEditorCanvas({
   const [coverMenuOpen, setCoverMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [insertDropdownOpen, setInsertDropdownOpen] = useState(false);
+  const [insertCategoryFilter, setInsertCategoryFilter] = useState<'all' | BlockCategory>('all');
+  const [collapsedInsertCats, setCollapsedInsertCats] = useState<Record<BlockCategory, boolean>>({
+    typography: false,
+    dev: false,
+    attachment: false,
+  });
   const [insertDropdownPos, setInsertDropdownPos] = useState<{ top: number; left: number }>({
     top: 0,
     left: 0,
@@ -183,6 +194,12 @@ function NoteEditorCanvas({
 
   const [mediaDialog, setMediaDialog] = useState<{
     kind: MediaKind;
+    rangeToDelete?: { from: number; to: number };
+    insertPos?: number;
+  } | null>(null);
+  const [linkDialog, setLinkDialog] = useState<{
+    initialText?: string;
+    initialUrl?: string;
     rangeToDelete?: { from: number; to: number };
     insertPos?: number;
   } | null>(null);
@@ -214,6 +231,7 @@ function NoteEditorCanvas({
         placeholder: 'Write freely, or type "/" to insert blocks...',
       }),
       CalloutNode,
+      TerminalNode,
       TextDirectionExtension,
       MediaImageNode,
       AudioNode,
@@ -302,6 +320,74 @@ function NoteEditorCanvas({
         .run();
     }
     setMediaDialog(null);
+  };
+
+  const openLinkDialog = (opts?: {
+    rangeToDelete?: { from: number; to: number };
+    insertPos?: number;
+  }) => {
+    if (!editor) return;
+    const { from, to } = editor.state.selection;
+    const selectedText =
+      !opts?.rangeToDelete && typeof opts?.insertPos !== 'number' && from !== to
+        ? editor.state.doc.textBetween(from, to, ' ')
+        : '';
+    const existingHref = (editor.getAttributes('link').href as string | undefined) || '';
+    setLinkDialog({
+      initialText: selectedText,
+      initialUrl: existingHref,
+      rangeToDelete: opts?.rangeToDelete,
+      insertPos: opts?.insertPos,
+    });
+  };
+
+  const handleLinkInsert = (url: string, label: string) => {
+    if (!editor || !linkDialog) return;
+    const linkContent = [
+      {
+        type: 'text',
+        text: label,
+        marks: [{ type: 'link', attrs: { href: url } }],
+      },
+      { type: 'text', text: ' ' },
+    ];
+
+    if (linkDialog.rangeToDelete) {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(linkDialog.rangeToDelete)
+        .insertContent(linkContent)
+        .run();
+    } else if (typeof linkDialog.insertPos === 'number') {
+      editor
+        .chain()
+        .focus()
+        .insertContentAt(linkDialog.insertPos, {
+          type: 'paragraph',
+          content: linkContent,
+        })
+        .run();
+    } else if (!editor.state.selection.empty && label === linkDialog.initialText) {
+      editor.chain().focus().setLink({ href: url }).run();
+    } else {
+      editor.chain().focus().insertContent(linkContent).run();
+    }
+    setLinkDialog(null);
+  };
+
+  const handleSelectInsertCommand = (cmd: BlockCommandItem) => {
+    if (!editor) return;
+    setInsertDropdownOpen(false);
+    if (cmd.mediaKind) {
+      setMediaDialog({ kind: cmd.mediaKind });
+      return;
+    }
+    if (cmd.actionKind === 'link') {
+      openLinkDialog();
+      return;
+    }
+    cmd.execute(editor);
   };
 
   const commitCoverDataUrl = (file: File) => {
@@ -634,7 +720,7 @@ function NoteEditorCanvas({
                   className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-red-500 hover:bg-red-500/10 cursor-pointer"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                  Delete permanently
+                  Move to Trash
                 </button>
               </div>
             )}
@@ -691,7 +777,7 @@ function NoteEditorCanvas({
                   const rect = e.currentTarget.getBoundingClientRect();
                   setInsertDropdownPos({
                     top: rect.bottom + 6,
-                    left: Math.min(window.innerWidth - 270, Math.max(8, rect.left)),
+                    left: Math.min(window.innerWidth - 300, Math.max(8, rect.left)),
                   });
                   setInsertDropdownOpen(true);
                 }}
@@ -699,6 +785,7 @@ function NoteEditorCanvas({
               >
                 <Plus className="h-3.5 w-3.5 text-[var(--accent)]" />
                 Insert block
+                <ChevronDown className="h-3 w-3 text-[var(--text-muted)]" />
               </button>
               {insertDropdownOpen && (
                 <>
@@ -708,39 +795,115 @@ function NoteEditorCanvas({
                   />
                   <div
                     style={{ top: insertDropdownPos.top, left: insertDropdownPos.left }}
-                    className="fixed z-50 w-64 max-h-[min(380px,70vh)] overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-1.5 shadow-[var(--shadow-popover)]"
+                    className="fixed z-50 w-72 overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] shadow-[var(--shadow-popover)]"
                   >
-                    <div className="px-2.5 py-1 text-[11px] font-medium text-[var(--text-muted)]">
-                      Insert block at cursor
-                    </div>
-                    {BLOCK_COMMANDS.map((cmd) => {
-                      const Icon = cmd.icon;
-                      return (
+                    {/* Category Tabs inside Dropdown */}
+                    <div className="border-b border-[var(--border-subtle)] bg-[var(--bg-canvas)]/70 p-2">
+                      <div className="mb-1.5 px-1 text-[11px] font-medium text-[var(--text-muted)]">
+                        Insert block
+                      </div>
+                      <div className="grid grid-cols-4 gap-1 rounded-lg bg-[var(--bg-secondary)] p-0.5">
                         <button
-                          key={cmd.id}
                           type="button"
-                          onClick={() => {
-                            setInsertDropdownOpen(false);
-                            if (cmd.mediaKind) {
-                              setMediaDialog({ kind: cmd.mediaKind });
-                            } else {
-                              cmd.execute(editor);
-                            }
-                          }}
-                          className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+                          onClick={() => setInsertCategoryFilter('all')}
+                          className={`rounded-md px-1.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+                            insertCategoryFilter === 'all'
+                              ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-xs'
+                              : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                          }`}
                         >
-                          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
-                            <Icon className="h-3.5 w-3.5" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="font-medium text-[var(--text-primary)]">{cmd.label}</div>
-                            <div className="truncate text-[10px] text-[var(--text-muted)]">
-                              {cmd.description}
-                            </div>
-                          </div>
+                          All
                         </button>
-                      );
-                    })}
+                        {BLOCK_CATEGORY_META.map((cat) => (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            onClick={() => setInsertCategoryFilter(cat.id)}
+                            className={`truncate rounded-md px-1.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+                              insertCategoryFilter === cat.id
+                                ? 'bg-[var(--bg-surface)] text-[var(--accent)] shadow-xs'
+                                : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                            }`}
+                          >
+                            {cat.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Categorized Block List */}
+                    <div className="max-h-[min(390px,65vh)] overflow-y-auto p-1.5 space-y-1.5">
+                      {BLOCK_CATEGORY_META.filter(
+                        (cat) => insertCategoryFilter === 'all' || insertCategoryFilter === cat.id
+                      ).map((cat, idx) => {
+                        const items = BLOCK_COMMANDS.filter((cmd) => cmd.category === cat.id);
+                        const isCollapsed =
+                          insertCategoryFilter === 'all' && collapsedInsertCats[cat.id];
+                        return (
+                          <div
+                            key={cat.id}
+                            className={idx > 0 ? 'border-t border-[var(--border-subtle)] pt-1.5' : ''}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (insertCategoryFilter !== 'all') return;
+                                setCollapsedInsertCats((prev) => ({
+                                  ...prev,
+                                  [cat.id]: !prev[cat.id],
+                                }));
+                              }}
+                              className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-left ${
+                                insertCategoryFilter === 'all'
+                                  ? 'hover:bg-[var(--bg-hover)] cursor-pointer'
+                                  : ''
+                              }`}
+                            >
+                              <span className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                                {cat.label}
+                              </span>
+                              <span className="flex items-center gap-1 text-[10px] text-[var(--text-muted)] tabular-nums">
+                                <span>{items.length}</span>
+                                {insertCategoryFilter === 'all' &&
+                                  (isCollapsed ? (
+                                    <ChevronRight className="h-3 w-3" />
+                                  ) : (
+                                    <ChevronDown className="h-3 w-3" />
+                                  ))}
+                              </span>
+                            </button>
+
+                            {!isCollapsed && (
+                              <div className="mt-0.5 space-y-0.5">
+                                {items.map((cmd) => {
+                                  const Icon = cmd.icon;
+                                  return (
+                                    <button
+                                      key={cmd.id}
+                                      type="button"
+                                      onClick={() => handleSelectInsertCommand(cmd)}
+                                      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+                                    >
+                                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] text-[var(--text-primary)]">
+                                        <Icon className="h-3.5 w-3.5" />
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                        <div className="font-medium text-[var(--text-primary)]">
+                                          {cmd.label}
+                                        </div>
+                                        <div className="truncate text-[10px] text-[var(--text-muted)]">
+                                          {cmd.description}
+                                        </div>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </>
               )}
@@ -838,6 +1001,12 @@ function NoteEditorCanvas({
 
             <div className="mx-1.5 h-4 w-px bg-[var(--border-subtle)]" />
 
+            <ToolbarIconBtn
+              active={editor.isActive('link')}
+              onClick={() => openLinkDialog()}
+              title="Add Link"
+              icon={<Link2 className="h-3.5 w-3.5" />}
+            />
             <ToolbarIconBtn
               active={false}
               onClick={() => setMediaDialog({ kind: 'image' })}
@@ -1297,6 +1466,7 @@ function NoteEditorCanvas({
               onRequestMediaAtPos={(kind, insertPos) =>
                 setMediaDialog({ kind, insertPos })
               }
+              onRequestLinkAtPos={(insertPos) => openLinkDialog({ insertPos })}
             />
             <EditorContent editor={editor} />
           </div>
@@ -1304,11 +1474,13 @@ function NoteEditorCanvas({
       </div>
 
       <SelectionToolbar editor={editor} />
+      <LinkHoverPopover editor={editor} />
       <SlashMenu
         editor={editor}
         onRequestMedia={(kind, rangeToDelete) =>
           setMediaDialog({ kind, rangeToDelete })
         }
+        onRequestLink={(rangeToDelete) => openLinkDialog({ rangeToDelete })}
       />
 
       {mediaDialog && (
@@ -1316,6 +1488,15 @@ function NoteEditorCanvas({
           kind={mediaDialog.kind}
           onClose={() => setMediaDialog(null)}
           onInsert={handleMediaInsert}
+        />
+      )}
+
+      {linkDialog && (
+        <LinkInsertDialog
+          initialText={linkDialog.initialText}
+          initialUrl={linkDialog.initialUrl}
+          onClose={() => setLinkDialog(null)}
+          onInsert={handleLinkInsert}
         />
       )}
 

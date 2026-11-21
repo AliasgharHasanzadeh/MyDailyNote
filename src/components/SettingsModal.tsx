@@ -1,25 +1,33 @@
 import {
   Calendar,
   Check,
+  ChevronDown,
   Cloud,
   ExternalLink,
+  Heart,
   LogOut,
   Moon,
+  Palette,
   RefreshCw,
   Settings,
   Sun,
+  Terminal,
   Upload,
   X,
 } from 'lucide-react';
 import type { DriveSaveStatus } from '../db/googleDrive';
 import type { GoogleUser } from '../googleAuth';
-import type { CalendarLocale } from '../types/workspace';
+import {
+  type CalendarLocale,
+  WORKSPACE_THEMES,
+  type WorkspaceTheme,
+} from '../types/workspace';
 import { formatFullDate, toDateKey } from '../utils/date';
 import { GoogleSignInButton } from './GoogleSignInButton';
 
 interface SettingsModalProps {
   open: boolean;
-  theme: 'dark' | 'light';
+  theme: WorkspaceTheme;
   calendarLocale: CalendarLocale;
   user: GoogleUser | null;
   driveConnected: boolean;
@@ -31,7 +39,7 @@ interface SettingsModalProps {
   lastDriveSyncAt: string | null;
   authBusy: boolean;
   authError: string | null;
-  onChangeTheme: (theme: 'dark' | 'light') => void;
+  onChangeTheme: (theme: WorkspaceTheme) => void;
   onChangeCalendarLocale: (locale: CalendarLocale) => void;
   onSignIn: () => void;
   onSignOut: () => void;
@@ -264,56 +272,82 @@ export function SettingsModal({
 
           {/* Theme Setting */}
           <section className="space-y-3 border-t border-[var(--border-subtle)] pt-5">
-            <div>
-              <h3 className="text-sm font-medium text-[var(--text-primary)]">Appearance</h3>
-              <p className="text-xs text-[var(--text-muted)]">
-                Switch between dark and light workspace themes
-              </p>
+            <div className="flex items-center gap-2">
+              <Palette className="h-4 w-4 text-[var(--accent)]" />
+              <div>
+                <h3 className="text-sm font-medium text-[var(--text-primary)]">Appearance</h3>
+                <p className="text-xs text-[var(--text-muted)]">
+                  Select a workspace theme from the menu below
+                </p>
+              </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => onChangeTheme('dark')}
-                className={`flex items-center justify-between rounded-xl border p-3.5 text-left transition-colors cursor-pointer ${
-                  theme === 'dark'
-                    ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
-                    : 'border-[var(--border-subtle)] bg-[var(--bg-canvas)] hover:border-[var(--border-strong)]'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-[#0C0D19] text-[#8B7CFF]">
-                    <Moon className="h-4 w-4" />
+            {(() => {
+              const activeThemeMeta =
+                WORKSPACE_THEMES.find((item) => item.id === theme) || WORKSPACE_THEMES[1];
+              return (
+                <div className="space-y-2.5">
+                  <div className="relative">
+                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--accent)]">
+                      {theme === 'light' ? (
+                        <Sun className="h-4 w-4" />
+                      ) : theme === 'dark' ? (
+                        <Moon className="h-4 w-4" />
+                      ) : theme === 'cybery' ? (
+                        <Terminal className="h-4 w-4" />
+                      ) : (
+                        <Heart className="h-4 w-4" />
+                      )}
+                    </span>
+                    <select
+                      aria-label="Workspace theme"
+                      value={theme}
+                      onChange={(e) => onChangeTheme(e.target.value as WorkspaceTheme)}
+                      className="w-full appearance-none rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] py-2.5 pl-10 pr-10 text-sm font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--border-strong)] focus:border-[var(--accent)] focus:outline-none cursor-pointer"
+                    >
+                      {WORKSPACE_THEMES.map((item) => (
+                        <option
+                          key={item.id}
+                          value={item.id}
+                          className="bg-[var(--bg-surface)] text-[var(--text-primary)]"
+                        >
+                          {item.label} — {item.subtitle}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
                   </div>
-                  <div>
-                    <div className="text-xs font-semibold text-[var(--text-primary)]">Dark</div>
-                    <div className="text-[11px] text-[var(--text-muted)]">Deep slate</div>
-                  </div>
-                </div>
-                {theme === 'dark' && <Check className="h-4 w-4 text-[var(--accent)]" />}
-              </button>
 
-              <button
-                type="button"
-                onClick={() => onChangeTheme('light')}
-                className={`flex items-center justify-between rounded-xl border p-3.5 text-left transition-colors cursor-pointer ${
-                  theme === 'light'
-                    ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
-                    : 'border-[var(--border-subtle)] bg-[var(--bg-canvas)] hover:border-[var(--border-strong)]'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-black/10 bg-[#FBFBFC] text-[#6B5CE7]">
-                    <Sun className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <div className="text-xs font-semibold text-[var(--text-primary)]">Light</div>
-                    <div className="text-[11px] text-[var(--text-muted)]">Clean paper</div>
+                  <div className="flex items-center justify-between rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3.5 py-2.5">
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-[var(--text-primary)]">
+                        {activeThemeMeta.label} Theme
+                      </div>
+                      <div className="text-[11px] text-[var(--text-muted)]">
+                        {activeThemeMeta.subtitle}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5" aria-hidden="true">
+                      <span
+                        className="h-4 w-4 rounded-full border border-[var(--border-strong)]"
+                        style={{ backgroundColor: activeThemeMeta.canvas }}
+                        title="Canvas"
+                      />
+                      <span
+                        className="h-4 w-4 rounded-full border border-[var(--border-strong)]"
+                        style={{ backgroundColor: activeThemeMeta.surface }}
+                        title="Surface"
+                      />
+                      <span
+                        className="h-4 w-4 rounded-full border border-[var(--border-strong)]"
+                        style={{ backgroundColor: activeThemeMeta.accent }}
+                        title="Accent"
+                      />
+                    </div>
                   </div>
                 </div>
-                {theme === 'light' && <Check className="h-4 w-4 text-[var(--accent)]" />}
-              </button>
-            </div>
+              );
+            })()}
           </section>
 
           {/* Calendar & Date System Setting */}

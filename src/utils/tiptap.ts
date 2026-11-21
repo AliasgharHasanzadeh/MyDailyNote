@@ -27,6 +27,16 @@ export function extractPlainText(node: JSONContent | undefined | null): string {
     if (n.type === 'mediaImage' && n.attrs?.caption) {
       parts.push(String(n.attrs.caption));
     }
+    if (n.type === 'terminalBlock') {
+      if (n.attrs?.title) parts.push(String(n.attrs.title));
+      if (Array.isArray(n.attrs?.entries)) {
+        for (const entry of n.attrs.entries as Array<{ command?: string; output?: string }>) {
+          if (entry.command) parts.push(`\n${entry.command}`);
+          if (entry.output) parts.push(`\n${entry.output}`);
+        }
+      }
+      parts.push('\n');
+    }
     if (Array.isArray(n.content)) {
       for (const child of n.content) {
         walk(child);
@@ -160,6 +170,16 @@ export function noteToMarkdown(note: Note): string {
         return `[Video: ${node.attrs?.src || 'Embedded video'}]`;
       case 'fileAttachment':
         return `[Attachment: ${node.attrs?.fileName || 'File'}]`;
+      case 'terminalBlock': {
+        const prompt = String(node.attrs?.prompt || '$');
+        const entries = Array.isArray(node.attrs?.entries)
+          ? (node.attrs.entries as Array<{ command?: string; output?: string }>)
+          : [];
+        const body = entries
+          .map((e) => `${prompt} ${e.command || ''}${e.output ? `\n${e.output}` : ''}`)
+          .join('\n');
+        return `\`\`\`bash\n${body}\n\`\`\``;
+      }
       default:
         return childrenText();
     }

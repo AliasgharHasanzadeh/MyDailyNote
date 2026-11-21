@@ -509,7 +509,7 @@ export function NotesBrowserView({
               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-red-500 hover:bg-red-500/10 cursor-pointer"
             >
               <Trash2 className="h-3.5 w-3.5" />
-              Delete Note
+              Move to Trash
             </button>
           </div>
         </div>
@@ -568,7 +568,7 @@ function NoteRowActions({
       <button
         type="button"
         onClick={() => onDeleteNote(note.id)}
-        title="Delete"
+        title="Move to Trash (recoverable for 30 days)"
         className="rounded p-1 text-[var(--text-muted)] opacity-100 lg:opacity-0 lg:group-hover:opacity-100 hover:text-red-500 cursor-pointer"
       >
         <Trash2 className="h-3.5 w-3.5" />

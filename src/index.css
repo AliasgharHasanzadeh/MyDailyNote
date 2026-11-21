@@ -40,6 +40,45 @@
   --shadow-popover: 0 16px 40px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
+/* Cybery — Network & Security Obsidian / Phosphor Workbench */
+html.theme-cybery {
+  --bg-canvas: #060b10;
+  --bg-sidebar: #081017;
+  --bg-surface: #0c161f;
+  --bg-secondary: #11202c;
+  --bg-hover: rgba(0, 217, 146, 0.075);
+  --bg-active: rgba(0, 217, 146, 0.15);
+  --text-primary: #e6fff5;
+  --text-secondary: #8fb8aa;
+  --text-muted: #567d70;
+  --accent: #00d992;
+  --accent-hover: #2bf0ae;
+  --accent-soft: rgba(0, 217, 146, 0.14);
+  --border-subtle: rgba(0, 217, 146, 0.14);
+  --border-strong: rgba(34, 211, 238, 0.28);
+  --shadow-popover: 0 18px 42px rgba(0, 0, 0, 0.72), 0 0 0 1px rgba(0, 217, 146, 0.16);
+  --font-display: 'JetBrains Mono', 'Vazirmatn', ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Pink — Soft Pastel Rose & Berry Stationery */
+html.theme-pink {
+  --bg-canvas: #fff7fa;
+  --bg-sidebar: #fdebf3;
+  --bg-surface: #ffffff;
+  --bg-secondary: #fbe2ed;
+  --bg-hover: rgba(219, 39, 119, 0.06);
+  --bg-active: rgba(219, 39, 119, 0.12);
+  --text-primary: #3b1228;
+  --text-secondary: #7a4661;
+  --text-muted: #a6748e;
+  --accent: #db2777;
+  --accent-hover: #be185d;
+  --accent-soft: rgba(219, 39, 119, 0.12);
+  --border-subtle: rgba(219, 39, 119, 0.14);
+  --border-strong: rgba(219, 39, 119, 0.26);
+  --shadow-popover: 0 14px 36px rgba(190, 24, 93, 0.11), 0 2px 8px rgba(190, 24, 93, 0.06);
+}
+
 @layer base {
   html,
   body,
@@ -62,6 +101,64 @@
     background-color: var(--accent-soft);
     color: var(--text-primary);
   }
+}
+
+/* Subtle atmospheric canvas styling per theme */
+html.theme-cybery .vellum-main-canvas {
+  background-image:
+    radial-gradient(640px circle at 92% 0%, rgba(0, 217, 146, 0.085), transparent 60%),
+    radial-gradient(520px circle at 12% 100%, rgba(34, 211, 238, 0.06), transparent 62%),
+    linear-gradient(to right, rgba(0, 217, 146, 0.038) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 217, 146, 0.038) 1px, transparent 1px);
+  background-size: auto, auto, 28px 28px, 28px 28px;
+}
+
+html.theme-pink .vellum-main-canvas {
+  background-image:
+    radial-gradient(680px circle at 90% 4%, rgba(244, 114, 182, 0.13), transparent 60%),
+    radial-gradient(520px circle at 14% 96%, rgba(251, 182, 206, 0.18), transparent 62%);
+}
+
+/* Cybery: maintain high-contrast dark ink on bright phosphor accent CTAs & checkboxes */
+html.theme-cybery .bg-\[var\(--accent\)\],
+html.theme-cybery .hover\:bg-\[var\(--accent\)\]:hover {
+  color: #031911 !important;
+}
+
+html.theme-cybery .vellum-editor .ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"]:checked::before {
+  background-color: #031911;
+}
+
+html.theme-cybery .vellum-editor .ProseMirror code,
+html.theme-cybery .vellum-editor .ProseMirror pre {
+  background-color: #050a0f;
+  border-color: rgba(0, 217, 146, 0.22);
+  color: #7ef7c9;
+}
+
+html.theme-cybery .vellum-editor .ProseMirror pre code {
+  color: #b7fce0;
+}
+
+html.theme-cybery .vellum-editor .ProseMirror blockquote {
+  background-color: rgba(17, 32, 44, 0.72);
+  border-color: rgba(34, 211, 238, 0.22);
+}
+
+html.theme-cybery ::-webkit-scrollbar-thumb {
+  background: rgba(0, 217, 146, 0.28);
+}
+
+html.theme-cybery ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 217, 146, 0.55);
+}
+
+html.theme-pink ::-webkit-scrollbar-thumb {
+  background: rgba(219, 39, 119, 0.24);
+}
+
+html.theme-pink ::-webkit-scrollbar-thumb:hover {
+  background: rgba(219, 39, 119, 0.45);
 }
 
 .font-display {

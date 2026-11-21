@@ -9,6 +9,7 @@ import {
   Copy,
   FileText,
   FolderPlus,
+  Heart,
   Home,
   Layers,
   LogOut,
@@ -23,6 +24,7 @@ import {
   Star,
   Sun,
   Target,
+  Terminal,
   Trash2,
   Upload,
   X,
@@ -30,8 +32,16 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DriveSaveStatus } from '../db/googleDrive';
 import type { GoogleUser } from '../googleAuth';
-import type { CalendarLocale, Folder, Note, WorkspaceSection } from '../types/workspace';
-import { QUICK_EMOJIS } from '../types/workspace';
+import {
+  type CalendarLocale,
+  type Folder,
+  type Note,
+  QUICK_EMOJIS,
+  THEME_ORDER,
+  WORKSPACE_THEMES,
+  type WorkspaceSection,
+  type WorkspaceTheme,
+} from '../types/workspace';
 import { formatCompactDate, isAutoJournalTitle } from '../utils/date';
 import { GoogleSignInButton } from './GoogleSignInButton';
 
@@ -41,7 +51,7 @@ interface LeftSidebarProps {
   activeSection: WorkspaceSection;
   activeNoteId: string | null;
   activeFolderId: string | null;
-  theme: 'dark' | 'light';
+  theme: WorkspaceTheme;
   calendarLocale: CalendarLocale;
   sidebarWidth: number;
   mobileOpen: boolean;
@@ -241,8 +251,15 @@ export function LeftSidebar({
     window.addEventListener('pointerup', onUp);
   };
 
-  const activeNotes = useMemo(() => notes.filter((n) => !n.isArchived), [notes]);
-  const archivedCount = useMemo(() => notes.filter((n) => n.isArchived).length, [notes]);
+  const activeNotes = useMemo(
+    () => notes.filter((n) => !n.isArchived && !n.deletedAt),
+    [notes]
+  );
+  const archivedCount = useMemo(
+    () => notes.filter((n) => n.isArchived && !n.deletedAt).length,
+    [notes]
+  );
+  const trashedCount = useMemo(() => notes.filter((n) => Boolean(n.deletedAt)).length, [notes]);
   const favoritesCount = useMemo(() => activeNotes.filter((n) => n.isFavorite).length, [activeNotes]);
   const pinnedNotes = useMemo(() => activeNotes.filter((n) => n.isPinned), [activeNotes]);
   const pinnedFolders = useMemo(() => folders.filter((f) => f.isPinned), [folders]);
@@ -318,6 +335,7 @@ export function LeftSidebar({
     { id: 'tasks', label: 'Tasks', icon: CheckSquare },
     { id: 'goals', label: 'Goals', icon: Target },
     { id: 'archived', label: 'Archived Notes', icon: Archive, count: archivedCount },
+    { id: 'trash', label: 'Trash', icon: Trash2, count: trashedCount },
   ];
 
   const rootFolders = useMemo(
@@ -598,14 +616,31 @@ export function LeftSidebar({
         </button>
 
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={onToggleTheme}
-            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
-          >
-            {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
-          </button>
+          {(() => {
+            const currentIdx = THEME_ORDER.indexOf(theme);
+            const nextThemeId = THEME_ORDER[(currentIdx + 1) % THEME_ORDER.length];
+            const currentMeta = WORKSPACE_THEMES.find((t) => t.id === theme) || WORKSPACE_THEMES[1];
+            const nextMeta = WORKSPACE_THEMES.find((t) => t.id === nextThemeId) || WORKSPACE_THEMES[0];
+            return (
+              <button
+                type="button"
+                onClick={onToggleTheme}
+                title={`Theme: ${currentMeta.label} — Switch to ${nextMeta.label}`}
+                aria-label={`Theme: ${currentMeta.label}. Switch to ${nextMeta.label}`}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              >
+                {theme === 'light' ? (
+                  <Sun className="h-3.5 w-3.5" />
+                ) : theme === 'dark' ? (
+                  <Moon className="h-3.5 w-3.5" />
+                ) : theme === 'cybery' ? (
+                  <Terminal className="h-3.5 w-3.5 text-[var(--accent)]" />
+                ) : (
+                  <Heart className="h-3.5 w-3.5 text-[var(--accent)]" />
+                )}
+              </button>
+            );
+          })()}
           <button
             type="button"
             onClick={onCollapseDesktop}
@@ -1144,7 +1179,7 @@ export function LeftSidebar({
                 />
                 <div className="my-1 h-px bg-[var(--border-subtle)]" />
                 <CtxBtn
-                  label="Delete Note"
+                  label="Move to Trash"
                   danger
                   icon={<Trash2 className="h-3.5 w-3.5" />}
                   onClick={() => {
@@ -1347,7 +1382,7 @@ export function LeftSidebar({
                 }}
                 className="w-full rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-left text-xs font-medium text-red-500 hover:bg-red-500/20 cursor-pointer"
               >
-                Delete folder and all contents inside
+                Delete folder and move notes to Trash (30 days)
               </button>
               <button
                 type="button"

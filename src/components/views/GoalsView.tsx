@@ -190,7 +190,7 @@ export function GoalsView({
               const pct = computeProgress(goal);
               const linkedTasks = tasks.filter((t) => t.linkedGoalId === goal.id);
               const linkedNotes = notes.filter(
-                (n) => !n.isArchived && goal.linkedNoteIds.includes(n.id)
+                (n) => !n.isArchived && !n.deletedAt && goal.linkedNoteIds.includes(n.id)
               );
 
               return (
@@ -583,7 +583,7 @@ export function GoalsView({
             </h3>
             <div className="max-h-64 overflow-y-auto space-y-1">
               {notes
-                .filter((n) => !n.isArchived)
+                .filter((n) => !n.isArchived && !n.deletedAt)
                 .map((n) => {
                   const current = goals.find((g) => g.id === noteLinkModalGoal.id) || noteLinkModalGoal;
                   const linked = current.linkedNoteIds.includes(n.id);

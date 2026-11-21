@@ -49,7 +49,10 @@ export function DashboardView({
   onQuickCreateTask,
 }: DashboardViewProps) {
   const todayKey = toDateKey();
-  const activeNotes = useMemo(() => notes.filter((n) => !n.isArchived), [notes]);
+  const activeNotes = useMemo(
+    () => notes.filter((n) => !n.isArchived && !n.deletedAt),
+    [notes]
+  );
 
   const todayJournal = useMemo(
     () => activeNotes.find((n) => n.journalDate === todayKey) || null,

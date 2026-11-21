@@ -55,7 +55,7 @@ export function JournalView({
   const journalNotes = useMemo(
     () =>
       notes
-        .filter((n) => !n.isArchived && Boolean(n.journalDate))
+        .filter((n) => !n.isArchived && !n.deletedAt && Boolean(n.journalDate))
         .sort((a, b) => (b.journalDate || '').localeCompare(a.journalDate || '')),
     [notes]
   );

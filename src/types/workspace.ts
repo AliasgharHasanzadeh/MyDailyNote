@@ -10,6 +10,7 @@ export type WorkspaceSection =
   | 'tasks'
   | 'goals'
   | 'archived'
+  | 'trash'
   | 'folder'
   | 'editor';
 
@@ -20,6 +21,51 @@ export type TaskStatus = 'todo' | 'in_progress' | 'done';
 export type TaskPriority = 'low' | 'medium' | 'high';
 export type GoalHorizon = 'short_term' | 'long_term';
 export type CalendarLocale = 'en' | 'fa';
+export type WorkspaceTheme = 'light' | 'dark' | 'cybery' | 'pink';
+
+export const THEME_ORDER: WorkspaceTheme[] = ['light', 'dark', 'cybery', 'pink'];
+
+export const WORKSPACE_THEMES: ReadonlyArray<{
+  id: WorkspaceTheme;
+  label: string;
+  subtitle: string;
+  canvas: string;
+  surface: string;
+  accent: string;
+}> = [
+  {
+    id: 'light',
+    label: 'Light',
+    subtitle: 'Clean paper daylight',
+    canvas: '#FBFBFC',
+    surface: '#FFFFFF',
+    accent: '#6B5CE7',
+  },
+  {
+    id: 'dark',
+    label: 'Dark',
+    subtitle: 'Deep indigo slate',
+    canvas: '#0C0D19',
+    surface: '#151622',
+    accent: '#8B7CFF',
+  },
+  {
+    id: 'cybery',
+    label: 'Cybery',
+    subtitle: 'NetSec obsidian & phosphor',
+    canvas: '#060B10',
+    surface: '#0C161F',
+    accent: '#00D992',
+  },
+  {
+    id: 'pink',
+    label: 'Pink',
+    subtitle: 'Soft pastel rose',
+    canvas: '#FFF7FA',
+    surface: '#FFFFFF',
+    accent: '#DB2777',
+  },
+];
 
 export interface Folder {
   id: string;
@@ -51,6 +97,7 @@ export interface Note {
   isFavorite: boolean;
   isPinned: boolean;
   isArchived: boolean;
+  deletedAt?: string | null;
   sortOrder: number;
   journalDate: string | null; // YYYY-MM-DD
   isCustomJournalTitle?: boolean;
@@ -108,7 +155,7 @@ export interface MediaAsset {
 
 export interface WorkspacePreferences {
   id: 'default';
-  theme: 'dark' | 'light';
+  theme: WorkspaceTheme;
   calendarLocale: CalendarLocale;
   rightSidebarOpen: boolean;
   leftSidebarCollapsed: boolean;

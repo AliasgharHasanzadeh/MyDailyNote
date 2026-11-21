@@ -61,11 +61,14 @@ export function RightPanel({
 
   const relatedNotes = useMemo(() => {
     const manualIds = new Set(note.linkedNoteIds);
-    const manual = allNotes.filter((n) => manualIds.has(n.id) && n.id !== note.id);
+    const manual = allNotes.filter(
+      (n) => manualIds.has(n.id) && !n.deletedAt && n.id !== note.id
+    );
     const suggested = allNotes.filter(
       (n) =>
         n.id !== note.id &&
         !n.isArchived &&
+        !n.deletedAt &&
         !manualIds.has(n.id) &&
         (n.tags.some((t) => note.tags.includes(t)) ||
           (note.parentFolderId && n.parentFolderId === note.parentFolderId))
@@ -76,7 +79,11 @@ export function RightPanel({
   const linkableCandidates = useMemo(
     () =>
       allNotes.filter(
-        (n) => n.id !== note.id && !n.isArchived && !note.linkedNoteIds.includes(n.id)
+        (n) =>
+          n.id !== note.id &&
+          !n.isArchived &&
+          !n.deletedAt &&
+          !note.linkedNoteIds.includes(n.id)
       ),
     [allNotes, note]
   );

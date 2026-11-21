@@ -1,4 +1,4 @@
-import { Cloud, PanelLeftOpen, Plus, Upload, X } from 'lucide-react';
+import { Cloud, PanelLeftOpen, Plus, RotateCcw, Trash2, Upload, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DriveConfirmDeleteModal } from './components/DriveConfirmDeleteModal';
 import { DriveSyncModal } from './components/DriveSyncModal';
@@ -13,6 +13,7 @@ import { GoalsView } from './components/views/GoalsView';
 import { JournalView } from './components/views/JournalView';
 import { NotesBrowserView } from './components/views/NotesBrowserView';
 import { TasksView } from './components/views/TasksView';
+import { TrashView } from './components/views/TrashView';
 import {
   type DriveSaveStatus,
   type DriveWorkspaceReadResult,
@@ -32,17 +33,19 @@ import {
   silentGoogleSignIn,
   subscribeDriveAccessToken,
 } from './googleAuth';
-import type {
-  CalendarLocale,
-  Folder,
-  Goal,
-  Note,
-  Task,
-  TaskPriority,
-  WorkspacePreferences,
-  WorkspaceSection,
+import {
+  type CalendarLocale,
+  type Folder,
+  type Goal,
+  type Note,
+  THEME_ORDER,
+  type Task,
+  type TaskPriority,
+  type WorkspacePreferences,
+  type WorkspaceSection,
+  type WorkspaceTheme,
 } from './types/workspace';
-import { buildAutoJournalTitle, isAutoJournalTitle, toDateKey } from './utils/date';
+import { buildAutoJournalTitle, isAutoJournalTitle, isTrashExpired, toDateKey } from './utils/date';
 import { EMPTY_DOC } from './utils/tiptap';
 
 const DRIVE_DIRTY_STORAGE_KEY = 'vellum_drive_dirty_v1';
@@ -154,7 +157,10 @@ export default function App() {
   const [driveRemoteResult, setDriveRemoteResult] = useState<DriveWorkspaceReadResult | null>(null);
   const [driveSyncBusy, setDriveSyncBusy] = useState(false);
   const [driveSyncError, setDriveSyncError] = useState<string | null>(null);
-  const [pendingDeleteNote, setPendingDeleteNote] = useState<Note | null>(null);
+  const [pendingPermanentDelete, setPendingPermanentDelete] = useState<
+    { kind: 'note'; note: Note } | { kind: 'empty_trash'; count: number } | null
+  >(null);
+  const [trashToast, setTrashToast] = useState<{ noteId: string; title: string } | null>(null);
 
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -167,6 +173,7 @@ export default function App() {
 
   const saveTimerRef = useRef<number | null>(null);
   const autoSaveTimerRef = useRef<number | null>(null);
+  const trashToastTimerRef = useRef<number | null>(null);
   const workspaceRef = useRef({ folders, notes, tasks, goals, prefs });
   workspaceRef.current = { folders, notes, tasks, goals, prefs };
   const driveFileIdRef = useRef<string | null>(driveFileId);
@@ -323,15 +330,22 @@ export default function App() {
     };
   }, [setDriveAutoSave]);
 
-  // Hydrate workspace from local IndexedDB cache on startup
+  // Hydrate workspace from local IndexedDB cache on startup & purge notes past 30-day Trash retention
   useEffect(() => {
     let cancelled = false;
     const init = async () => {
       const localData = await seedInitialWorkspaceIfEmpty();
       if (cancelled) return;
+      const expiredIds = localData.notes
+        .filter((n) => isTrashExpired(n.deletedAt))
+        .map((n) => n.id);
+      if (expiredIds.length > 0) {
+        expiredIds.forEach((id) => void db.deleteNote(id));
+      }
+      const validNotes = localData.notes.filter((n) => !isTrashExpired(n.deletedAt));
       setFolders(localData.folders);
       setNotes(
-        syncAutoJournalTitles(localData.notes, localData.preferences.calendarLocale, (n) =>
+        syncAutoJournalTitles(validNotes, localData.preferences.calendarLocale, (n) =>
           db.saveNote(n)
         )
       );
@@ -346,11 +360,27 @@ export default function App() {
     };
   }, []);
 
+  // Periodically purge any trashed notes whose 30-day recovery window expires while the app is open
+  useEffect(() => {
+    if (!notes.some((n) => Boolean(n.deletedAt))) return;
+    const interval = window.setInterval(() => {
+      setNotes((prev) => {
+        const expired = prev.filter((n) => isTrashExpired(n.deletedAt));
+        if (expired.length === 0) return prev;
+        expired.forEach((n) => removeNote(n.id));
+        return prev.filter((n) => !isTrashExpired(n.deletedAt));
+      });
+    }, 60_000);
+    return () => window.clearInterval(interval);
+  }, [notes, removeNote]);
+
   const applyDriveSnapshot = useCallback(
     async (result: DriveWorkspaceReadResult) => {
       if (!result.data) return;
+      const validRemoteNotes = result.data.notes.filter((n) => !isTrashExpired(n.deletedAt));
+      const hadExpiredTrash = validRemoteNotes.length !== result.data.notes.length;
       const hydratedNotes = syncAutoJournalTitles(
-        result.data.notes,
+        validRemoteNotes,
         result.data.preferences.calendarLocale
       );
       const nextSnapshot = {
@@ -369,7 +399,7 @@ export default function App() {
       setDriveFileId(result.fileId);
       setDriveFolderUrl(result.folderUrl);
       setDriveModifiedTime(result.modifiedTime);
-      setDriveDirty(false);
+      setDriveDirty(hadExpiredTrash);
       recordDriveSyncTime(result.modifiedTime || result.data.updatedAt);
     },
     [setDriveDirty, recordDriveSyncTime]
@@ -702,15 +732,23 @@ export default function App() {
     }
   }, [driveRemoteResult, applyDriveSnapshot, setDriveAutoSave]);
 
-  // Sync theme class on <html>
+  // Sync theme classes on <html>
   useEffect(() => {
     const root = document.documentElement;
-    if (prefs.theme === 'dark') {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
-    }
+    const isDarkSurface = prefs.theme === 'dark' || prefs.theme === 'cybery';
+    root.classList.toggle('dark', isDarkSurface);
+    root.classList.toggle('theme-cybery', prefs.theme === 'cybery');
+    root.classList.toggle('theme-pink', prefs.theme === 'pink');
+    root.dataset.theme = prefs.theme;
   }, [prefs.theme]);
+
+  const cycleTheme = useCallback(
+    (current: WorkspaceTheme): WorkspaceTheme => {
+      const idx = THEME_ORDER.indexOf(current);
+      return THEME_ORDER[(idx + 1) % THEME_ORDER.length];
+    },
+    []
+  );
 
   const updatePrefs = useCallback(
     (patch: Partial<WorkspacePreferences>) => {
@@ -796,30 +834,93 @@ export default function App() {
     [updatePrefs, persistNote]
   );
 
-  const executeDeleteNote = useCallback(
+  const showTrashUndoToast = useCallback((noteId: string, title: string) => {
+    if (trashToastTimerRef.current) {
+      window.clearTimeout(trashToastTimerRef.current);
+    }
+    setTrashToast({ noteId, title });
+    trashToastTimerRef.current = window.setTimeout(() => {
+      setTrashToast(null);
+      trashToastTimerRef.current = null;
+    }, 6500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (trashToastTimerRef.current) {
+        window.clearTimeout(trashToastTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Soft-delete note into 30-day Trash (or prompt permanent deletion if already trashed)
+  const handleDeleteNote = useCallback(
     (noteId: string) => {
-      setNotes((prev) => prev.filter((n) => n.id !== noteId));
-      removeNote(noteId);
+      const target = notes.find((n) => n.id === noteId);
+      if (!target) return;
+      if (target.deletedAt) {
+        setPendingPermanentDelete({ kind: 'note', note: target });
+        return;
+      }
+
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+        setSaveState('saved');
+      }
+
+      const now = new Date().toISOString();
+      const trashedNote: Note = {
+        ...target,
+        deletedAt: now,
+        isPinned: false,
+        updatedAt: now,
+      };
+
+      setNotes((prev) => prev.map((n) => (n.id === noteId ? trashedNote : n)));
+      persistNote(trashedNote);
+
       if (prefs.activeNoteId === noteId) {
         updatePrefs({ activeNoteId: null, activeSection: 'all_notes' });
       }
+      showTrashUndoToast(trashedNote.id, trashedNote.title || 'Untitled');
     },
-    [prefs.activeNoteId, updatePrefs, removeNote]
+    [notes, prefs.activeNoteId, updatePrefs, persistNote, showTrashUndoToast]
   );
 
-  const handleDeleteNote = useCallback(
+  const handleRestoreNote = useCallback(
     (noteId: string) => {
-      if (driveConnected) {
-        const target = notes.find((n) => n.id === noteId);
-        if (target) {
-          setPendingDeleteNote(target);
-          return;
-        }
-      }
-      executeDeleteNote(noteId);
+      const target = notes.find((n) => n.id === noteId);
+      if (!target) return;
+      const folderStillExists =
+        target.parentFolderId && folders.some((f) => f.id === target.parentFolderId);
+      const restored: Note = {
+        ...target,
+        deletedAt: null,
+        parentFolderId: folderStillExists ? target.parentFolderId : null,
+        updatedAt: new Date().toISOString(),
+      };
+      setNotes((prev) => prev.map((n) => (n.id === noteId ? restored : n)));
+      persistNote(restored);
+      setTrashToast((prev) => (prev?.noteId === noteId ? null : prev));
     },
-    [driveConnected, notes, executeDeleteNote]
+    [notes, folders, persistNote]
   );
+
+  const handlePermanentDeleteNote = useCallback(
+    (noteId: string) => {
+      const target = notes.find((n) => n.id === noteId);
+      if (!target) return;
+      setPendingPermanentDelete({ kind: 'note', note: target });
+    },
+    [notes]
+  );
+
+  const handleEmptyTrash = useCallback(() => {
+    const count = notes.filter((n) => Boolean(n.deletedAt)).length;
+    if (count === 0) return;
+    setPendingPermanentDelete({ kind: 'empty_trash', count });
+  }, [notes]);
 
   const handleSelectNote = useCallback(
     (noteId: string) => {
@@ -843,7 +944,9 @@ export default function App() {
   const handleOpenJournalDate = useCallback(
     (dateKey: string, createAdditional = false) => {
       if (!createAdditional) {
-        const existing = notes.find((n) => !n.isArchived && n.journalDate === dateKey);
+        const existing = notes.find(
+          (n) => !n.isArchived && !n.deletedAt && n.journalDate === dateKey
+        );
         if (existing) {
           updatePrefs({ activeSection: 'editor', activeNoteId: existing.id });
           return;
@@ -854,7 +957,7 @@ export default function App() {
         (f) => f.name.toLowerCase() === 'daily life'
       );
       const now = new Date().toISOString();
-      const suffixCount = notes.filter((n) => n.journalDate === dateKey).length;
+      const suffixCount = notes.filter((n) => !n.deletedAt && n.journalDate === dateKey).length;
       const localizedTitle = buildAutoJournalTitle(
         dateKey,
         prefs.calendarLocale,
@@ -873,6 +976,7 @@ export default function App() {
         isFavorite: false,
         isPinned: false,
         isArchived: false,
+        deletedAt: null,
         sortOrder: 0,
         journalDate: dateKey,
         isCustomJournalTitle: false,
@@ -979,16 +1083,26 @@ export default function App() {
           }
         }
         toDeleteIds.forEach((id) => removeFolder(id));
-        const deletedNoteIds = new Set<string>();
-        notes.forEach((n) => {
+        const now = new Date().toISOString();
+        const affectedNoteIds = new Set<string>();
+        const nextNotes = notes.map((n) => {
           if (n.parentFolderId && toDeleteIds.has(n.parentFolderId)) {
-            deletedNoteIds.add(n.id);
-            removeNote(n.id);
+            affectedNoteIds.add(n.id);
+            const movedToTrash: Note = {
+              ...n,
+              parentFolderId: null,
+              isPinned: false,
+              deletedAt: n.deletedAt || now,
+              updatedAt: now,
+            };
+            persistNote(movedToTrash);
+            return movedToTrash;
           }
+          return n;
         });
         setFolders((prev) => prev.filter((f) => !toDeleteIds.has(f.id)));
-        setNotes((prev) => prev.filter((n) => !deletedNoteIds.has(n.id)));
-        if (prefs.activeNoteId && deletedNoteIds.has(prefs.activeNoteId)) {
+        setNotes(nextNotes);
+        if (prefs.activeNoteId && affectedNoteIds.has(prefs.activeNoteId)) {
           updatePrefs({ activeNoteId: null, activeSection: 'dashboard' });
         }
       }
@@ -1006,7 +1120,6 @@ export default function App() {
       persistFolder,
       persistNote,
       removeFolder,
-      removeNote,
     ]
   );
 
@@ -1181,7 +1294,7 @@ export default function App() {
   }, [prefs, updatePrefs, handleCreateNote, handleRequestSaveToDrive]);
 
   const activeNote = useMemo(
-    () => notes.find((n) => n.id === prefs.activeNoteId) || null,
+    () => notes.find((n) => n.id === prefs.activeNoteId && !n.deletedAt) || null,
     [notes, prefs.activeNoteId]
   );
 
@@ -1190,9 +1303,14 @@ export default function App() {
     [folders, prefs.activeFolderId]
   );
 
+  const trashedNotes = useMemo(
+    () => notes.filter((n) => Boolean(n.deletedAt)),
+    [notes]
+  );
+
   // Filtered note collections for browser views
   const browserViewMeta = useMemo(() => {
-    const nonArchived = notes.filter((n) => !n.isArchived);
+    const nonArchived = notes.filter((n) => !n.isArchived && !n.deletedAt);
     if (prefs.activeSection === 'quick_access') {
       return {
         title: 'Quick Access',
@@ -1220,8 +1338,8 @@ export default function App() {
     if (prefs.activeSection === 'archived') {
       return {
         title: 'Archived Notes',
-        subtitle: 'Restore or permanently remove archived pages',
-        items: notes.filter((n) => n.isArchived),
+        subtitle: 'Restore or remove archived pages',
+        items: notes.filter((n) => n.isArchived && !n.deletedAt),
         pinnedFolders: [],
       };
     }
@@ -1280,9 +1398,7 @@ export default function App() {
           onCloseMobile={() => setMobileSidebarOpen(false)}
           onCollapseDesktop={() => updatePrefs({ leftSidebarCollapsed: true })}
           onResizeWidth={(leftSidebarWidth) => updatePrefs({ leftSidebarWidth })}
-          onToggleTheme={() =>
-            updatePrefs({ theme: prefs.theme === 'dark' ? 'light' : 'dark' })
-          }
+          onToggleTheme={() => updatePrefs({ theme: cycleTheme(prefs.theme) })}
           onOpenSettings={() => setSettingsOpen(true)}
           onSelectSection={(section: WorkspaceSection) =>
             updatePrefs({ activeSection: section, activeFolderId: null })
@@ -1336,9 +1452,7 @@ export default function App() {
               onCloseMobile={() => setMobileSidebarOpen(false)}
               onCollapseDesktop={() => updatePrefs({ leftSidebarCollapsed: true })}
               onResizeWidth={(leftSidebarWidth) => updatePrefs({ leftSidebarWidth })}
-              onToggleTheme={() =>
-                updatePrefs({ theme: prefs.theme === 'dark' ? 'light' : 'dark' })
-              }
+              onToggleTheme={() => updatePrefs({ theme: cycleTheme(prefs.theme) })}
               onOpenSettings={() => setSettingsOpen(true)}
               onSelectSection={(section: WorkspaceSection) =>
                 updatePrefs({ activeSection: section, activeFolderId: null })
@@ -1373,7 +1487,7 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <main className="relative min-w-0 flex-1 h-full overflow-hidden flex flex-col">
+      <main className="vellum-main-canvas relative min-w-0 flex-1 h-full overflow-hidden flex flex-col">
         {authError && (
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-400">
             <span className="truncate">{authError}</span>
@@ -1505,6 +1619,16 @@ export default function App() {
             onSelectNote={handleSelectNote}
             onToggleTask={handleToggleTask}
             onCreateTaskForGoal={handleCreateTaskForGoal}
+          />
+        ) : prefs.activeSection === 'trash' ? (
+          <TrashView
+            notes={trashedNotes}
+            folders={folders}
+            calendarLocale={prefs.calendarLocale}
+            onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
+            onRestoreNote={handleRestoreNote}
+            onPermanentDeleteNote={handlePermanentDeleteNote}
+            onEmptyTrash={handleEmptyTrash}
           />
         ) : prefs.activeSection === 'all_notes' ||
           prefs.activeSection === 'quick_access' ||
@@ -1669,18 +1793,76 @@ export default function App() {
       />
 
       <DriveConfirmDeleteModal
-        open={Boolean(pendingDeleteNote)}
-        title="Delete note from Google Drive workspace?"
-        description={`"${pendingDeleteNote?.title || 'Untitled'}" will be removed from your workspace and synced to Google Drive (Vellum Workspace).`}
-        confirmLabel="Delete Note"
+        open={Boolean(pendingPermanentDelete)}
+        title={
+          pendingPermanentDelete?.kind === 'empty_trash'
+            ? `Empty Trash (${pendingPermanentDelete.count} notes)?`
+            : 'Delete note permanently?'
+        }
+        description={
+          pendingPermanentDelete?.kind === 'empty_trash'
+            ? `All ${pendingPermanentDelete.count} note(s) in Trash will be permanently deleted and cannot be recovered.`
+            : `"${
+                pendingPermanentDelete?.note.title || 'Untitled'
+              }" will be permanently deleted and cannot be recovered.`
+        }
+        confirmLabel={
+          pendingPermanentDelete?.kind === 'empty_trash' ? 'Empty Trash' : 'Delete Forever'
+        }
         onConfirm={() => {
-          if (pendingDeleteNote) {
-            executeDeleteNote(pendingDeleteNote.id);
-            setPendingDeleteNote(null);
+          if (!pendingPermanentDelete) return;
+          if (pendingPermanentDelete.kind === 'note') {
+            const targetId = pendingPermanentDelete.note.id;
+            setNotes((prev) => prev.filter((n) => n.id !== targetId));
+            removeNote(targetId);
+          } else {
+            const trashedIds = notes.filter((n) => Boolean(n.deletedAt)).map((n) => n.id);
+            trashedIds.forEach((id) => removeNote(id));
+            setNotes((prev) => prev.filter((n) => !n.deletedAt));
           }
+          setPendingPermanentDelete(null);
         }}
-        onCancel={() => setPendingDeleteNote(null)}
+        onCancel={() => setPendingPermanentDelete(null)}
       />
+
+      {trashToast && (
+        <div className="fixed bottom-4 right-4 left-4 sm:left-auto z-50 flex items-center justify-between gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-3.5 py-2.5 text-xs shadow-[var(--shadow-popover)] sm:max-w-md">
+          <div className="flex min-w-0 items-center gap-2 text-[var(--text-primary)]">
+            <Trash2 className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
+            <span dir="auto" className="truncate">
+              Moved &ldquo;{trashToast.title}&rdquo; to Trash (30 days left)
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => handleRestoreNote(trashToast.noteId)}
+              className="inline-flex items-center gap-1 rounded-lg bg-[var(--accent-soft)] px-2.5 py-1 text-[11px] font-semibold text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white transition-colors cursor-pointer"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Undo
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTrashToast(null);
+                updatePrefs({ activeSection: 'trash', activeFolderId: null });
+              }}
+              className="rounded-lg px-2 py-1 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+            >
+              View
+            </button>
+            <button
+              type="button"
+              onClick={() => setTrashToast(null)}
+              className="rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-hover)] cursor-pointer"
+              aria-label="Dismiss notification"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Quick Create Task Modal (from Dashboard) */}
       {quickTaskOpen && (
