@@ -28,6 +28,7 @@ import {
   googleSignIn,
   googleSignOut,
   onGoogleAuthChanged,
+  preloadGoogleAuth,
   silentGoogleSignIn,
   subscribeDriveAccessToken,
 } from './googleAuth';
@@ -295,6 +296,7 @@ export default function App() {
 
   // Google Auth & Google Drive access token listeners
   useEffect(() => {
+    preloadGoogleAuth();
     const unsub = onGoogleAuthChanged((googleUser) => {
       setUser(googleUser);
       if (!googleUser) {
@@ -1399,9 +1401,9 @@ export default function App() {
               <Cloud className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
               <span className="truncate">
                 {user && silentRestoreFailed
-                  ? `Google Drive sync paused (browser blocked silent refresh). Click Reconnect to resume auto-sync for ${
+                  ? `Drive sync paused after refresh (Google requires 1 click to resume access for ${
                       user.email || 'your account'
-                    }.`
+                    }). Your Drive data is safe.`
                   : user
                   ? 'Google Drive disconnected — browser storage is temporary. Reconnect to load & auto-save your workspace to Drive.'
                   : 'Google Drive is your primary storage — connect Google Drive to load & auto-save all notes, tasks, goals, and media.'}
@@ -1448,6 +1450,8 @@ export default function App() {
             calendarLocale={prefs.calendarLocale}
             saveState={saveState}
             driveSaveStatus={driveSaveStatus}
+            hasRememberedDriveAccount={Boolean(user)}
+            driveRestoring={driveRestoring}
             hasPendingDriveChanges={hasPendingDriveChanges}
             onRequestSaveToDrive={handleRequestSaveToDrive}
             onRequestConnectDrive={handleSignIn}

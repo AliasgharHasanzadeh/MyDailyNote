@@ -37,6 +37,7 @@ declare global {
             client_id: string;
             scope: string;
             hint?: string;
+            prompt?: string;
             callback: (response: GisTokenResponse) => void;
             error_callback?: (error: GisError) => void;
           }) => GisTokenClient;
@@ -150,6 +151,23 @@ function ensureGisLoaded(): Promise<void> {
     if (existing) {
       if (existing.dataset.gisState === 'error') {
         existing.remove();
+      } else if (existing.dataset.gisState === 'loaded') {
+        // Script already fired load; give global namespace a short poll before failing
+        let checks = 0;
+        const poll = () => {
+          if (window.google?.accounts?.oauth2?.initTokenClient) {
+            resolve();
+            return;
+          }
+          checks += 1;
+          if (checks >= 20) {
+            handleError();
+            return;
+          }
+          window.setTimeout(poll, 50);
+        };
+        poll();
+        return;
       } else {
         existing.addEventListener('load', handleReady, { once: true });
         existing.addEventListener('error', handleError, { once: true });
@@ -173,6 +191,13 @@ function ensureGisLoaded(): Promise<void> {
   });
 
   return gisLoadPromise;
+}
+
+export function preloadGoogleAuth(): void {
+  if (typeof window === 'undefined') return;
+  void ensureGisLoaded().catch(() => {
+    // Preload is best-effort
+  });
 }
 
 async function fetchDriveUserProfile(accessToken: string): Promise<GoogleUser> {
@@ -283,6 +308,7 @@ export async function silentGoogleSignIn(): Promise<{
           client_id: OAUTH_CLIENT_ID,
           scope: GOOGLE_DRIVE_SCOPES.join(' '),
           hint,
+          prompt: 'none',
           callback: (response) => {
             if (response.error || !response.access_token) {
               finish(null);
@@ -327,7 +353,10 @@ export async function googleSignIn(): Promise<{ user: GoogleUser; accessToken: s
     throw new Error('Google OAuth client ID is not configured.');
   }
 
-  await ensureGisLoaded();
+  // Keep requestAccessToken synchronous within user click gesture whenever GIS is already loaded
+  if (!window.google?.accounts?.oauth2?.initTokenClient) {
+    await ensureGisLoaded();
+  }
 
   const oauth2 = window.google?.accounts?.oauth2;
   if (!oauth2?.initTokenClient) {

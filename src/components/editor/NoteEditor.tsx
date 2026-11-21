@@ -77,6 +77,8 @@ interface NoteEditorProps {
   calendarLocale: CalendarLocale;
   saveState: 'saved' | 'saving';
   driveSaveStatus?: DriveSaveStatus;
+  hasRememberedDriveAccount?: boolean;
+  driveRestoring?: boolean;
   hasPendingDriveChanges?: boolean;
   onRequestSaveToDrive?: () => void;
   onRequestConnectDrive?: () => void;
@@ -97,6 +99,8 @@ export function NoteEditor({
   calendarLocale,
   saveState,
   driveSaveStatus,
+  hasRememberedDriveAccount = false,
+  driveRestoring = false,
   hasPendingDriveChanges,
   onRequestSaveToDrive,
   onRequestConnectDrive,
@@ -118,6 +122,8 @@ export function NoteEditor({
       calendarLocale={calendarLocale}
       saveState={saveState}
       driveSaveStatus={driveSaveStatus}
+      hasRememberedDriveAccount={hasRememberedDriveAccount}
+      driveRestoring={driveRestoring}
       hasPendingDriveChanges={hasPendingDriveChanges}
       onRequestSaveToDrive={onRequestSaveToDrive}
       onRequestConnectDrive={onRequestConnectDrive}
@@ -140,6 +146,8 @@ function NoteEditorCanvas({
   calendarLocale,
   saveState,
   driveSaveStatus = 'disconnected',
+  hasRememberedDriveAccount = false,
+  driveRestoring = false,
   hasPendingDriveChanges,
   onRequestSaveToDrive,
   onRequestConnectDrive,
@@ -484,15 +492,26 @@ function NoteEditorCanvas({
 
         <div className="flex items-center gap-1.5 shrink-0">
           {driveSaveStatus === 'disconnected' ? (
-            <button
-              type="button"
-              onClick={onRequestConnectDrive}
-              title="Browser storage is temporary. Connect Google Drive to save permanently."
-              className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 cursor-pointer whitespace-nowrap"
-            >
-              <Cloud className="h-3.5 w-3.5" />
-              Not in Drive · Connect
-            </button>
+            driveRestoring ? (
+              <span className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-2.5 py-1 text-xs text-[var(--text-secondary)] whitespace-nowrap">
+                <Cloud className="h-3.5 w-3.5 animate-pulse text-[var(--accent)]" />
+                Restoring Drive...
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={onRequestConnectDrive}
+                title={
+                  hasRememberedDriveAccount
+                    ? 'Your Drive data is safe — click to resume Google Drive sync in this tab.'
+                    : 'Browser storage is temporary. Connect Google Drive to save permanently.'
+                }
+                className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 cursor-pointer whitespace-nowrap"
+              >
+                <Cloud className="h-3.5 w-3.5" />
+                {hasRememberedDriveAccount ? 'Drive paused · Reconnect' : 'Not in Drive · Connect'}
+              </button>
+            )
           ) : driveSaveStatus === 'saving' || saveState === 'saving' ? (
             <span className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-subtle)] px-2.5 py-1 text-xs text-[var(--text-secondary)] whitespace-nowrap">
               <Cloud className="h-3.5 w-3.5 animate-pulse text-[var(--accent)]" />
