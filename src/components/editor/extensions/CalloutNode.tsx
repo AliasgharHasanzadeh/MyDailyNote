@@ -9,11 +9,17 @@ const CALLOUT_EMOJIS = ['💡', '📌', '📝', '✨', '⚠️', '🧭', '🎯',
 function CalloutView({ node, updateAttributes, deleteNode }: NodeViewProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const emoji = (node.attrs.emoji as string) || '💡';
+  const dirAttr =
+    node.attrs.dir === 'rtl' || node.attrs.dir === 'ltr'
+      ? (node.attrs.dir as 'rtl' | 'ltr')
+      : undefined;
 
   return (
     <NodeViewWrapper
       className="group relative my-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3.5 transition-colors"
       data-type="callout"
+      dir={dirAttr}
+      data-explicit-dir={dirAttr}
     >
       <div className="flex items-start gap-3">
         <div className="relative shrink-0 pt-0.5" contentEditable={false}>
@@ -51,7 +57,7 @@ function CalloutView({ node, updateAttributes, deleteNode }: NodeViewProps) {
           contentEditable={false}
           onClick={deleteNode}
           title="Remove callout"
-          className="opacity-0 group-hover:opacity-100 shrink-0 rounded-md p-1 text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-red-500 transition-opacity cursor-pointer"
+          className="opacity-70 lg:opacity-0 lg:group-hover:opacity-100 shrink-0 rounded-md p-1 text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-red-500 transition-opacity cursor-pointer"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>

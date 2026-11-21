@@ -137,11 +137,80 @@ export function LeftSidebar({
   const [liveWidth, setLiveWidth] = useState(sidebarWidth);
   const [isResizing, setIsResizing] = useState(false);
   const liveWidthRef = useRef(sidebarWidth);
+  const longPressTimerRef = useRef<number | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const suppressNextClickRef = useRef(false);
 
   useEffect(() => {
     setLiveWidth(sidebarWidth);
     liveWidthRef.current = sidebarWidth;
   }, [sidebarWidth]);
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current !== null) {
+        window.clearTimeout(longPressTimerRef.current);
+      }
+    };
+  }, []);
+
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    touchStartRef.current = null;
+  };
+
+  const startLongPress = (
+    e: React.TouchEvent,
+    onTrigger: (x: number, y: number) => void
+  ) => {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const startX = touch.clientX;
+    const startY = touch.clientY;
+    touchStartRef.current = { x: startX, y: startY };
+    cancelLongPress();
+    touchStartRef.current = { x: startX, y: startY };
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressTimerRef.current = null;
+      suppressNextClickRef.current = true;
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        try {
+          navigator.vibrate(15);
+        } catch {
+          // Ignore unsupported vibration errors
+        }
+      }
+      onTrigger(
+        Math.min(window.innerWidth - 210, Math.max(12, startX)),
+        Math.min(window.innerHeight - 300, Math.max(12, startY))
+      );
+    }, 450);
+  };
+
+  const handleTouchMoveLongPress = (e: React.TouchEvent) => {
+    if (!touchStartRef.current || e.touches.length !== 1) {
+      cancelLongPress();
+      return;
+    }
+    const touch = e.touches[0];
+    const dx = Math.abs(touch.clientX - touchStartRef.current.x);
+    const dy = Math.abs(touch.clientY - touchStartRef.current.y);
+    if (dx > 10 || dy > 10) {
+      cancelLongPress();
+    }
+  };
+
+  const endLongPress = () => {
+    cancelLongPress();
+    if (suppressNextClickRef.current) {
+      window.setTimeout(() => {
+        suppressNextClickRef.current = false;
+      }, 150);
+    }
+  };
 
   const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -309,8 +378,14 @@ export function LeftSidebar({
               y: Math.min(window.innerHeight - 280, e.clientY),
             });
           }}
+          onTouchStart={(e) =>
+            startLongPress(e, (x, y) => setContextMenu({ kind: 'folder', folder, x, y }))
+          }
+          onTouchMove={handleTouchMoveLongPress}
+          onTouchEnd={endLongPress}
+          onTouchCancel={endLongPress}
           style={{ paddingLeft: `${8 + depth * 14}px` }}
-          className={`group flex items-center gap-1 rounded-lg pr-1.5 py-1 text-[13px] transition-colors ${
+          className={`touch-callout-none group flex items-center gap-1 rounded-lg pr-1.5 py-1 text-[13px] transition-colors ${
             isDragTarget
               ? 'bg-[var(--accent-soft)] ring-1 ring-[var(--accent)]'
               : isSelected
@@ -337,6 +412,7 @@ export function LeftSidebar({
           {renamingId === folder.id ? (
             <input
               type="text"
+              dir="auto"
               autoFocus
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
@@ -351,17 +427,18 @@ export function LeftSidebar({
             <button
               type="button"
               onClick={() => {
+                if (suppressNextClickRef.current) return;
                 onSelectFolder(folder.id);
                 onCloseMobile();
               }}
               className="flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-left cursor-pointer"
             >
               <span className="shrink-0 text-sm leading-none">{folder.icon}</span>
-              <span className="truncate">{folder.name}</span>
+              <span dir="auto" className="truncate">{folder.name}</span>
             </button>
           )}
 
-          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-0.5 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
             <button
               type="button"
               onClick={(e) => {
@@ -372,9 +449,9 @@ export function LeftSidebar({
                 }
               }}
               title="New note inside folder"
-              className="flex h-5 w-5 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              className="flex h-6 w-6 lg:h-5 lg:w-5 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
             >
-              <Plus className="h-3 w-3" />
+              <Plus className="h-3.5 w-3.5 lg:h-3 lg:w-3" />
             </button>
             <button
               type="button"
@@ -389,9 +466,9 @@ export function LeftSidebar({
                 });
               }}
               title="Folder actions"
-              className="flex h-5 w-5 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+              className="flex h-6 w-6 lg:h-5 lg:w-5 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
             >
-              <MoreHorizontal className="h-3 w-3" />
+              <MoreHorizontal className="h-3.5 w-3.5 lg:h-3 lg:w-3" />
             </button>
           </div>
         </div>
@@ -426,8 +503,14 @@ export function LeftSidebar({
             y: Math.min(window.innerHeight - 260, e.clientY),
           });
         }}
+        onTouchStart={(e) =>
+          startLongPress(e, (x, y) => setContextMenu({ kind: 'note', note, x, y }))
+        }
+        onTouchMove={handleTouchMoveLongPress}
+        onTouchEnd={endLongPress}
+        onTouchCancel={endLongPress}
         style={{ paddingLeft: `${22 + depth * 14}px` }}
-        className={`group flex items-center gap-1.5 rounded-lg pr-1.5 py-1 text-[13px] transition-colors ${
+        className={`touch-callout-none group flex items-center gap-1.5 rounded-lg pr-1.5 py-1 text-[13px] transition-colors ${
           isSelected
             ? 'bg-[var(--bg-active)] text-[var(--text-primary)] font-medium'
             : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
@@ -436,6 +519,7 @@ export function LeftSidebar({
         {renamingId === note.id ? (
           <input
             type="text"
+            dir="auto"
             autoFocus
             value={renameValue}
             onChange={(e) => setRenameValue(e.target.value)}
@@ -450,6 +534,7 @@ export function LeftSidebar({
           <button
             type="button"
             onClick={() => {
+              if (suppressNextClickRef.current) return;
               onSelectNote(note.id);
               onCloseMobile();
             }}
@@ -460,11 +545,11 @@ export function LeftSidebar({
             ) : (
               <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
             )}
-            <span className="truncate">{note.title || 'Untitled'}</span>
+            <span dir="auto" className="truncate">{note.title || 'Untitled'}</span>
           </button>
         )}
 
-        <span className="shrink-0 text-[11px] text-[var(--text-muted)] tabular-nums group-hover:hidden">
+        <span className="shrink-0 text-[11px] text-[var(--text-muted)] tabular-nums lg:group-hover:hidden">
           {formatCompactDate(note.updatedAt, calendarLocale)}
         </span>
 
@@ -480,10 +565,11 @@ export function LeftSidebar({
               y: Math.min(window.innerHeight - 260, rect.bottom + 4),
             });
           }}
-          className="hidden group-hover:flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+          className="flex lg:hidden lg:group-hover:flex h-6 w-6 lg:h-5 lg:w-5 shrink-0 items-center justify-center rounded text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
           title="Note actions"
+          aria-label="Note actions"
         >
-          <MoreHorizontal className="h-3 w-3" />
+          <MoreHorizontal className="h-3.5 w-3.5 lg:h-3 lg:w-3" />
         </button>
       </div>
     );
@@ -616,32 +702,68 @@ export function LeftSidebar({
                 <button
                   key={`pin_${pf.id}`}
                   type="button"
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({
+                      kind: 'folder',
+                      folder: pf,
+                      x: Math.min(window.innerWidth - 210, e.clientX),
+                      y: Math.min(window.innerHeight - 280, e.clientY),
+                    });
+                  }}
+                  onTouchStart={(e) =>
+                    startLongPress(e, (x, y) =>
+                      setContextMenu({ kind: 'folder', folder: pf, x, y })
+                    )
+                  }
+                  onTouchMove={handleTouchMoveLongPress}
+                  onTouchEnd={endLongPress}
+                  onTouchCancel={endLongPress}
                   onClick={() => {
+                    if (suppressNextClickRef.current) return;
                     onSelectFolder(pf.id);
                     onCloseMobile();
                   }}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1 text-left text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+                  className="touch-callout-none flex w-full items-center gap-2 rounded-lg px-2.5 py-1 text-left text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
                 >
                   <span className="text-xs">{pf.icon}</span>
-                  <span className="truncate">{pf.name}</span>
+                  <span dir="auto" className="truncate">{pf.name}</span>
                 </button>
               ))}
               {pinnedNotes.map((pn) => (
                 <button
                   key={`pin_${pn.id}`}
                   type="button"
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({
+                      kind: 'note',
+                      note: pn,
+                      x: Math.min(window.innerWidth - 210, e.clientX),
+                      y: Math.min(window.innerHeight - 260, e.clientY),
+                    });
+                  }}
+                  onTouchStart={(e) =>
+                    startLongPress(e, (x, y) =>
+                      setContextMenu({ kind: 'note', note: pn, x, y })
+                    )
+                  }
+                  onTouchMove={handleTouchMoveLongPress}
+                  onTouchEnd={endLongPress}
+                  onTouchCancel={endLongPress}
                   onClick={() => {
+                    if (suppressNextClickRef.current) return;
                     onSelectNote(pn.id);
                     onCloseMobile();
                   }}
-                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1 text-left text-[13px] cursor-pointer ${
+                  className={`touch-callout-none flex w-full items-center gap-2 rounded-lg px-2.5 py-1 text-left text-[13px] cursor-pointer ${
                     activeSection === 'editor' && activeNoteId === pn.id
                       ? 'bg-[var(--bg-active)] text-[var(--text-primary)] font-medium'
                       : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
                   }`}
                 >
                   <span className="text-xs">{pn.icon || '📄'}</span>
-                  <span className="truncate">{pn.title || 'Untitled'}</span>
+                  <span dir="auto" className="truncate">{pn.title || 'Untitled'}</span>
                 </button>
               ))}
             </div>
@@ -858,11 +980,14 @@ export function LeftSidebar({
         </div>
       )}
 
-      {/* Right-click / Overflow Context Menu */}
+      {/* Right-click / Long-Press / Overflow Context Menu */}
       {contextMenu && (
         <div
-          className="fixed inset-0 z-50"
-          onClick={() => setContextMenu(null)}
+          className="fixed inset-0 z-50 max-sm:bg-black/40 max-sm:backdrop-blur-[1px]"
+          onClick={() => {
+            if (suppressNextClickRef.current) return;
+            setContextMenu(null);
+          }}
           onContextMenu={(e) => {
             e.preventDefault();
             setContextMenu(null);
@@ -871,8 +996,30 @@ export function LeftSidebar({
           <div
             style={{ top: contextMenu.y, left: contextMenu.x }}
             onClick={(e) => e.stopPropagation()}
-            className="fixed w-48 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-1.5 shadow-[var(--shadow-popover)]"
+            className="fixed w-48 max-sm:!top-auto max-sm:!left-3 max-sm:!right-3 max-sm:!bottom-3 max-sm:!w-auto rounded-2xl sm:rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-2 sm:p-1.5 shadow-[var(--shadow-popover)]"
           >
+            <div className="mb-1.5 flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-2.5 pb-2 sm:hidden">
+              <div className="flex min-w-0 items-center gap-2 text-xs font-semibold text-[var(--text-primary)]">
+                <span>
+                  {contextMenu.kind === 'folder'
+                    ? contextMenu.folder.icon
+                    : contextMenu.note.icon || '📄'}
+                </span>
+                <span dir="auto" className="truncate">
+                  {contextMenu.kind === 'folder'
+                    ? contextMenu.folder.name
+                    : contextMenu.note.title || 'Untitled'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setContextMenu(null)}
+                className="rounded-md p-1 text-[var(--text-muted)] hover:bg-[var(--bg-hover)]"
+                aria-label="Close menu"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
             {contextMenu.kind === 'folder' ? (
               <>
                 <CtxBtn
@@ -881,6 +1028,7 @@ export function LeftSidebar({
                     onCreateNote(contextMenu.folder.id);
                     onUpdateFolder({ ...contextMenu.folder, isExpanded: true });
                     setContextMenu(null);
+                    onCloseMobile();
                   }}
                 />
                 <CtxBtn
@@ -937,6 +1085,7 @@ export function LeftSidebar({
                   onClick={() => {
                     onSelectNote(contextMenu.note.id);
                     setContextMenu(null);
+                    onCloseMobile();
                   }}
                 />
                 <CtxBtn
@@ -949,6 +1098,7 @@ export function LeftSidebar({
                   onClick={() => {
                     onDuplicateNote(contextMenu.note);
                     setContextMenu(null);
+                    onCloseMobile();
                   }}
                 />
                 <CtxBtn

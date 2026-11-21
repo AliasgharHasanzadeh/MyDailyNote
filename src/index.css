@@ -145,7 +145,7 @@
 .vellum-editor .ProseMirror p.is-editor-empty:first-child::before,
 .vellum-editor .ProseMirror p.is-empty::before {
   content: attr(data-placeholder);
-  float: left;
+  float: inline-start;
   color: var(--text-muted);
   pointer-events: none;
   height: 0;
@@ -153,12 +153,12 @@
 
 .vellum-editor .ProseMirror ul:not([data-type="taskList"]) {
   list-style-type: disc;
-  padding-left: 1.45rem;
+  padding-inline-start: 1.45rem;
 }
 
 .vellum-editor .ProseMirror ol {
   list-style-type: decimal;
-  padding-left: 1.45rem;
+  padding-inline-start: 1.45rem;
 }
 
 .vellum-editor .ProseMirror li {
@@ -172,7 +172,7 @@
 /* Interactive Checklists */
 .vellum-editor .ProseMirror ul[data-type="taskList"] {
   list-style: none;
-  padding-left: 0;
+  padding-inline-start: 0;
   margin: 0.5rem 0;
 }
 
@@ -298,6 +298,48 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 10px;
+}
+
+/* RTL / LTR Note & Block Direction Support */
+.vellum-editor[data-note-dir="rtl"] .ProseMirror {
+  direction: rtl;
+  text-align: right;
+}
+
+.vellum-editor[data-note-dir="rtl"] .ProseMirror :is(p, h1, h2, h3, blockquote, ul, ol, li, [data-type="callout"]):not([data-explicit-dir]) {
+  direction: rtl;
+  text-align: right;
+}
+
+.vellum-editor[data-note-dir="ltr"] .ProseMirror {
+  direction: ltr;
+  text-align: left;
+}
+
+.vellum-editor[data-note-dir="ltr"] .ProseMirror :is(p, h1, h2, h3, blockquote, ul, ol, li, [data-type="callout"]):not([data-explicit-dir]) {
+  direction: ltr;
+  text-align: left;
+}
+
+.vellum-editor .ProseMirror [data-explicit-dir="rtl"] {
+  direction: rtl;
+  text-align: right;
+}
+
+.vellum-editor .ProseMirror [data-explicit-dir="ltr"] {
+  direction: ltr;
+  text-align: left;
+}
+
+.vellum-editor .ProseMirror pre {
+  direction: ltr;
+  text-align: left;
+}
+
+.touch-callout-none {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -55,6 +55,7 @@ export interface Note {
   journalDate: string | null; // YYYY-MM-DD
   isCustomJournalTitle?: boolean;
   journalMetadata?: JournalMetadata;
+  textDirection?: 'auto' | 'rtl' | 'ltr';
   linkedNoteIds: string[];
   createdAt: string;
   updatedAt: string;

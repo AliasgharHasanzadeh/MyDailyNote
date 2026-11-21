@@ -1,5 +1,7 @@
 import type { Editor } from '@tiptap/react';
 import {
+  AlignLeft,
+  AlignRight,
   Bold,
   Check,
   Code,
@@ -12,6 +14,7 @@ import {
   Unlink,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { getActiveBlockDirection } from './extensions/TextDirectionExtension';
 
 interface SelectionToolbarProps {
   editor: Editor | null;
@@ -167,6 +170,23 @@ export function SelectionToolbar({ editor }: SelectionToolbarProps) {
             title="Heading 2"
           >
             <Heading2 className="h-3.5 w-3.5" />
+          </button>
+          <div className="mx-0.5 h-4 w-px bg-[var(--border-subtle)]" />
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleTextDirection('rtl').run()}
+            className={btnCls(getActiveBlockDirection(editor) === 'rtl')}
+            title="Right-to-Left (RTL)"
+          >
+            <AlignRight className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleTextDirection('ltr').run()}
+            className={btnCls(getActiveBlockDirection(editor) === 'ltr')}
+            title="Left-to-Right (LTR)"
+          >
+            <AlignLeft className="h-3.5 w-3.5" />
           </button>
           <div className="mx-0.5 h-4 w-px bg-[var(--border-subtle)]" />
           <button

@@ -10,8 +10,9 @@ import {
   Search,
   Star,
   Trash2,
+  X,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CalendarLocale, Folder, Note, NoteViewMode } from '../../types/workspace';
 import { formatRelativeTime } from '../../utils/date';
 import { getPreviewSnippet } from '../../utils/tiptap';
@@ -52,6 +53,69 @@ export function NotesBrowserView({
 }: NotesBrowserViewProps) {
   const [query, setQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string>('all');
+  const [holdMenuNote, setHoldMenuNote] = useState<Note | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const suppressNextClickRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current !== null) {
+        window.clearTimeout(longPressTimerRef.current);
+      }
+    };
+  }, []);
+
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    touchStartRef.current = null;
+  };
+
+  const startHoldNote = (e: React.TouchEvent, target: Note) => {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    cancelLongPress();
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressTimerRef.current = null;
+      suppressNextClickRef.current = true;
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        try {
+          navigator.vibrate(15);
+        } catch {
+          // Ignore
+        }
+      }
+      setHoldMenuNote(target);
+    }, 450);
+  };
+
+  const moveHoldNote = (e: React.TouchEvent) => {
+    if (!touchStartRef.current || e.touches.length !== 1) {
+      cancelLongPress();
+      return;
+    }
+    const touch = e.touches[0];
+    if (
+      Math.abs(touch.clientX - touchStartRef.current.x) > 10 ||
+      Math.abs(touch.clientY - touchStartRef.current.y) > 10
+    ) {
+      cancelLongPress();
+    }
+  };
+
+  const endHoldNote = () => {
+    cancelLongPress();
+    if (suppressNextClickRef.current) {
+      window.setTimeout(() => {
+        suppressNextClickRef.current = false;
+      }, 150);
+    }
+  };
 
   const allTags = useMemo(() => {
     const set = new Set<string>();
@@ -229,24 +293,35 @@ export function NotesBrowserView({
                 return (
                   <div
                     key={n.id}
-                    className="group flex flex-col overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)] transition-colors"
+                    onTouchStart={(e) => startHoldNote(e, n)}
+                    onTouchMove={moveHoldNote}
+                    onTouchEnd={endHoldNote}
+                    onTouchCancel={endHoldNote}
+                    className="touch-callout-none group flex flex-col overflow-hidden rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--border-strong)] transition-colors"
                   >
                     {n.coverImage && (
-                      <GridCoverPreview coverImage={n.coverImage} onClick={() => onSelectNote(n.id)} />
+                      <GridCoverPreview
+                        coverImage={n.coverImage}
+                        onClick={() => {
+                          if (!suppressNextClickRef.current) onSelectNote(n.id);
+                        }}
+                      />
                     )}
                     <div className="flex flex-1 flex-col justify-between p-4">
                       <div>
                         <button
                           type="button"
-                          onClick={() => onSelectNote(n.id)}
+                          onClick={() => {
+                            if (!suppressNextClickRef.current) onSelectNote(n.id);
+                          }}
                           className="flex w-full items-center gap-2 text-left cursor-pointer"
                         >
                           <span className="text-base leading-none">{n.icon || '📄'}</span>
-                          <h3 className="truncate text-sm font-semibold text-[var(--text-primary)]">
+                          <h3 dir="auto" className="truncate text-sm font-semibold text-[var(--text-primary)]">
                             {n.title || 'Untitled'}
                           </h3>
                         </button>
-                        <p className="mt-2 text-xs leading-relaxed text-[var(--text-secondary)] line-clamp-3">
+                        <p dir="auto" className="mt-2 text-xs leading-relaxed text-[var(--text-secondary)] line-clamp-3">
                           {getPreviewSnippet(n.plainText, 130)}
                         </p>
                       </div>
@@ -270,15 +345,21 @@ export function NotesBrowserView({
                 return (
                   <div
                     key={n.id}
-                    className="group flex h-10 items-center justify-between gap-3 px-4 hover:bg-[var(--bg-hover)] transition-colors"
+                    onTouchStart={(e) => startHoldNote(e, n)}
+                    onTouchMove={moveHoldNote}
+                    onTouchEnd={endHoldNote}
+                    onTouchCancel={endHoldNote}
+                    className="touch-callout-none group flex h-10 items-center justify-between gap-3 px-4 hover:bg-[var(--bg-hover)] transition-colors"
                   >
                     <button
                       type="button"
-                      onClick={() => onSelectNote(n.id)}
+                      onClick={() => {
+                        if (!suppressNextClickRef.current) onSelectNote(n.id);
+                      }}
                       className="flex min-w-0 flex-1 items-center gap-2.5 text-left cursor-pointer"
                     >
                       <span className="text-sm leading-none">{n.icon || '📄'}</span>
-                      <span className="truncate text-sm font-medium text-[var(--text-primary)]">
+                      <span dir="auto" className="truncate text-sm font-medium text-[var(--text-primary)]">
                         {n.title || 'Untitled'}
                       </span>
                       {folderName && (
@@ -288,7 +369,7 @@ export function NotesBrowserView({
                       )}
                     </button>
                     <div className="flex items-center gap-3 shrink-0">
-                      <span className="text-xs text-[var(--text-muted)] tabular-nums">
+                      <span className="hidden sm:inline text-xs text-[var(--text-muted)] tabular-nums">
                         {formatRelativeTime(n.updatedAt, calendarLocale)}
                       </span>
                       <NoteRowActions note={n} onUpdateNote={onUpdateNote} onDeleteNote={onDeleteNote} />
@@ -304,20 +385,26 @@ export function NotesBrowserView({
                 return (
                   <div
                     key={n.id}
-                    className="group flex items-start justify-between gap-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4 hover:border-[var(--border-strong)] transition-colors"
+                    onTouchStart={(e) => startHoldNote(e, n)}
+                    onTouchMove={moveHoldNote}
+                    onTouchEnd={endHoldNote}
+                    onTouchCancel={endHoldNote}
+                    className="touch-callout-none group flex items-start justify-between gap-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4 hover:border-[var(--border-strong)] transition-colors"
                   >
                     <button
                       type="button"
-                      onClick={() => onSelectNote(n.id)}
+                      onClick={() => {
+                        if (!suppressNextClickRef.current) onSelectNote(n.id);
+                      }}
                       className="min-w-0 flex-1 text-left cursor-pointer"
                     >
                       <div className="flex items-center gap-2">
                         <span className="text-base leading-none">{n.icon || '📄'}</span>
-                        <h3 className="truncate text-sm font-semibold text-[var(--text-primary)]">
+                        <h3 dir="auto" className="truncate text-sm font-semibold text-[var(--text-primary)]">
                           {n.title || 'Untitled'}
                         </h3>
                       </div>
-                      <p className="mt-1.5 text-xs leading-relaxed text-[var(--text-secondary)] line-clamp-2">
+                      <p dir="auto" className="mt-1.5 text-xs leading-relaxed text-[var(--text-secondary)] line-clamp-2">
                         {getPreviewSnippet(n.plainText, 180)}
                       </p>
                       <div className="mt-2.5 flex flex-wrap items-center gap-2 text-[11px] text-[var(--text-muted)] tabular-nums">
@@ -336,6 +423,97 @@ export function NotesBrowserView({
           )}
         </div>
       </div>
+
+      {holdMenuNote && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-3 backdrop-blur-[1px] sm:items-center"
+          onClick={() => {
+            if (suppressNextClickRef.current) return;
+            setHoldMenuNote(null);
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-2 shadow-[var(--shadow-popover)] space-y-1"
+          >
+            <div className="mb-1 flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-2.5 pb-2">
+              <div className="flex min-w-0 items-center gap-2 text-xs font-semibold text-[var(--text-primary)]">
+                <span>{holdMenuNote.icon || '📄'}</span>
+                <span dir="auto" className="truncate">
+                  {holdMenuNote.title || 'Untitled'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHoldMenuNote(null)}
+                className="rounded-md p-1 text-[var(--text-muted)] hover:bg-[var(--bg-hover)]"
+                aria-label="Close actions"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                onSelectNote(holdMenuNote.id);
+                setHoldMenuNote(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+            >
+              Open Note
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onUpdateNote({ ...holdMenuNote, isFavorite: !holdMenuNote.isFavorite });
+                setHoldMenuNote(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+            >
+              <Star className="h-3.5 w-3.5" />
+              {holdMenuNote.isFavorite ? 'Remove Favorite' : 'Add to Favorites'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onUpdateNote({ ...holdMenuNote, isPinned: !holdMenuNote.isPinned });
+                setHoldMenuNote(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+            >
+              <Pin className="h-3.5 w-3.5" />
+              {holdMenuNote.isPinned ? 'Unpin' : 'Pin to Quick Access'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onUpdateNote({ ...holdMenuNote, isArchived: !holdMenuNote.isArchived });
+                setHoldMenuNote(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] cursor-pointer"
+            >
+              {holdMenuNote.isArchived ? (
+                <ArchiveRestore className="h-3.5 w-3.5" />
+              ) : (
+                <Archive className="h-3.5 w-3.5" />
+              )}
+              {holdMenuNote.isArchived ? 'Restore from Archive' : 'Archive Note'}
+            </button>
+            <div className="my-1 h-px bg-[var(--border-subtle)]" />
+            <button
+              type="button"
+              onClick={() => {
+                onDeleteNote(holdMenuNote.id);
+                setHoldMenuNote(null);
+              }}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-red-500 hover:bg-red-500/10 cursor-pointer"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete Note
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -358,7 +536,7 @@ function NoteRowActions({
         className={`rounded p-1 cursor-pointer ${
           note.isFavorite
             ? 'text-amber-400'
-            : 'text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:text-[var(--text-primary)]'
+            : 'text-[var(--text-muted)] opacity-100 lg:opacity-0 lg:group-hover:opacity-100 hover:text-[var(--text-primary)]'
         }`}
       >
         <Star className={`h-3.5 w-3.5 ${note.isFavorite ? 'fill-amber-400' : ''}`} />
@@ -370,7 +548,7 @@ function NoteRowActions({
         className={`rounded p-1 cursor-pointer ${
           note.isPinned
             ? 'text-[var(--accent)]'
-            : 'text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:text-[var(--text-primary)]'
+            : 'text-[var(--text-muted)] opacity-100 lg:opacity-0 lg:group-hover:opacity-100 hover:text-[var(--text-primary)]'
         }`}
       >
         <Pin className="h-3.5 w-3.5" />
@@ -379,7 +557,7 @@ function NoteRowActions({
         type="button"
         onClick={() => onUpdateNote({ ...note, isArchived: !note.isArchived })}
         title={note.isArchived ? 'Restore' : 'Archive'}
-        className="rounded p-1 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:text-[var(--text-primary)] cursor-pointer"
+        className="rounded p-1 text-[var(--text-muted)] opacity-100 lg:opacity-0 lg:group-hover:opacity-100 hover:text-[var(--text-primary)] cursor-pointer"
       >
         {note.isArchived ? (
           <ArchiveRestore className="h-3.5 w-3.5" />
@@ -391,7 +569,7 @@ function NoteRowActions({
         type="button"
         onClick={() => onDeleteNote(note.id)}
         title="Delete"
-        className="rounded p-1 text-[var(--text-muted)] opacity-0 group-hover:opacity-100 hover:text-red-500 cursor-pointer"
+        className="rounded p-1 text-[var(--text-muted)] opacity-100 lg:opacity-0 lg:group-hover:opacity-100 hover:text-red-500 cursor-pointer"
       >
         <Trash2 className="h-3.5 w-3.5" />
       </button>

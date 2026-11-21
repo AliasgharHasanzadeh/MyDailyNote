@@ -5,6 +5,8 @@ import { EditorContent, useEditor } from '@tiptap/react';
 import type { JSONContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import {
+  AlignLeft,
+  AlignRight,
   Archive,
   ArchiveRestore,
   Calendar,
@@ -59,6 +61,10 @@ import { AudioNode } from './extensions/AudioNode';
 import { CalloutNode } from './extensions/CalloutNode';
 import { FileAttachmentNode } from './extensions/FileAttachmentNode';
 import { MediaImageNode } from './extensions/MediaImageNode';
+import {
+  TextDirectionExtension,
+  getActiveBlockDirection,
+} from './extensions/TextDirectionExtension';
 import { useResolvedCoverUrl } from './extensions/useMediaUrl';
 import { VideoNode } from './extensions/VideoNode';
 import { MediaInsertDialog } from './MediaInsertDialog';
@@ -200,6 +206,7 @@ function NoteEditorCanvas({
         placeholder: 'Write freely, or type "/" to insert blocks...',
       }),
       CalloutNode,
+      TextDirectionExtension,
       MediaImageNode,
       AudioNode,
       VideoNode,
@@ -778,6 +785,41 @@ function NoteEditorCanvas({
             <div className="mx-1.5 h-4 w-px bg-[var(--border-subtle)]" />
 
             <ToolbarIconBtn
+              active={getActiveBlockDirection(editor) === 'rtl'}
+              onClick={() => editor.chain().focus().toggleTextDirection('rtl').run()}
+              title="Right-to-Left paragraph (RTL)"
+              icon={<AlignRight className="h-3.5 w-3.5" />}
+            />
+            <ToolbarIconBtn
+              active={getActiveBlockDirection(editor) === 'ltr'}
+              onClick={() => editor.chain().focus().toggleTextDirection('ltr').run()}
+              title="Left-to-Right paragraph (LTR)"
+              icon={<AlignLeft className="h-3.5 w-3.5" />}
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const current = note.textDirection || 'auto';
+                const next = current === 'auto' ? 'rtl' : current === 'rtl' ? 'ltr' : 'auto';
+                onUpdateNote({
+                  ...note,
+                  textDirection: next,
+                  updatedAt: new Date().toISOString(),
+                });
+              }}
+              title="Switch whole page direction (Auto / RTL / LTR)"
+              className={`ml-0.5 flex h-7 shrink-0 items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                note.textDirection === 'rtl' || note.textDirection === 'ltr'
+                  ? 'border-[var(--accent)]/40 bg-[var(--accent-soft)] text-[var(--accent)]'
+                  : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              {(note.textDirection || 'auto').toUpperCase()}
+            </button>
+
+            <div className="mx-1.5 h-4 w-px bg-[var(--border-subtle)]" />
+
+            <ToolbarIconBtn
               active={false}
               onClick={() => setMediaDialog({ kind: 'image' })}
               title="Insert Image"
@@ -829,7 +871,7 @@ function NoteEditorCanvas({
               />
             ) : null}
             <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent pointer-events-none" />
-            <div className="absolute bottom-3 right-4 flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
+            <div className="absolute bottom-3 right-4 flex items-center gap-1.5 opacity-90 lg:opacity-0 transition-opacity lg:group-hover:opacity-100">
               <button
                 type="button"
                 onClick={() => setCoverMenuOpen((prev) => !prev)}
@@ -1205,7 +1247,13 @@ function NoteEditorCanvas({
           {/* Editable Document Title */}
           <input
             type="text"
-            dir="auto"
+            dir={
+              note.textDirection === 'rtl'
+                ? 'rtl'
+                : note.textDirection === 'ltr'
+                ? 'ltr'
+                : 'auto'
+            }
             value={title}
             onChange={(e) => handleTitleChange(e.target.value)}
             onKeyDown={(e) => {
@@ -1219,7 +1267,11 @@ function NoteEditorCanvas({
           />
 
           {/* Freeform TipTap Canvas with Left Block Gutter */}
-          <div ref={canvasRef} className="vellum-editor relative pl-12 -ml-12">
+          <div
+            ref={canvasRef}
+            data-note-dir={note.textDirection || 'auto'}
+            className="vellum-editor relative pl-12 -ml-12"
+          >
             <BlockGutter
               editor={editor}
               containerRef={canvasRef}

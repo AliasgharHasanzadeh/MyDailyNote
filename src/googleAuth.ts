@@ -8,7 +8,8 @@ export interface GoogleUser {
 
 export const GOOGLE_DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file'] as const;
 
-const OAUTH_CLIENT_ID = oauthConfig.oAuthClientId;
+const OAUTH_CLIENT_ID =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() || oauthConfig.oAuthClientId;
 const GIS_SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 
 interface GisTokenResponse {
