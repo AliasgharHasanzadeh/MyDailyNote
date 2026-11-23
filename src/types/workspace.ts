@@ -166,6 +166,7 @@ export interface WorkspacePreferences {
   activeNoteId: string | null;
   activeSection: WorkspaceSection;
   activeFolderId: string | null;
+  openTabIds?: string[];
 }
 
 export const BUILT_IN_COVERS = [

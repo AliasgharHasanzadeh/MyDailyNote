@@ -4,6 +4,7 @@ import { DriveConfirmDeleteModal } from './components/DriveConfirmDeleteModal';
 import { DriveSyncModal } from './components/DriveSyncModal';
 import { GoogleSignInButton } from './components/GoogleSignInButton';
 import { LeftSidebar } from './components/LeftSidebar';
+import { NoteTabBar } from './components/NoteTabBar';
 import { RightPanel } from './components/RightPanel';
 import { SearchCommandPalette } from './components/SearchCommandPalette';
 import { SettingsModal } from './components/SettingsModal';
@@ -112,6 +113,7 @@ export default function App() {
     activeNoteId: null,
     activeSection: 'dashboard',
     activeFolderId: null,
+    openTabIds: [],
   });
 
   const [user, setUser] = useState<GoogleUser | null>(() => getCurrentGoogleUser());
@@ -171,7 +173,7 @@ export default function App() {
   const [quickTaskPriority, setQuickTaskPriority] = useState<TaskPriority>('medium');
   const [quickTaskDate, setQuickTaskDate] = useState(toDateKey());
 
-  const saveTimerRef = useRef<number | null>(null);
+  const saveTimersRef = useRef<Map<string, number>>(new Map());
   const autoSaveTimerRef = useRef<number | null>(null);
   const trashToastTimerRef = useRef<number | null>(null);
   const workspaceRef = useRef({ folders, notes, tasks, goals, prefs });
@@ -771,17 +773,51 @@ export default function App() {
     [updatePrefs, persistNote]
   );
 
-  // Note CRUD with reliable autosave
+  const buildTabListWithActiveFallback = useCallback((p: WorkspacePreferences): string[] => {
+    const base = Array.isArray(p.openTabIds) ? [...p.openTabIds] : [];
+    if (p.activeSection === 'editor' && p.activeNoteId && !base.includes(p.activeNoteId)) {
+      base.push(p.activeNoteId);
+    }
+    return base;
+  }, []);
+
+  // Note CRUD with reliable per-note debounced autosave so rapid tab switches never drop edits
   const handleUpdateNote = useCallback(
     (updated: Note) => {
       setNotes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
       setSaveState('saving');
-      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = window.setTimeout(() => {
-        persistNote(updated).then(() => setSaveState('saved'));
+      const existingTimer = saveTimersRef.current.get(updated.id);
+      if (existingTimer) window.clearTimeout(existingTimer);
+      const timerId = window.setTimeout(() => {
+        saveTimersRef.current.delete(updated.id);
+        persistNote(updated).then(() => {
+          if (saveTimersRef.current.size === 0) {
+            setSaveState('saved');
+          }
+        });
       }, 360);
+      saveTimersRef.current.set(updated.id, timerId);
     },
     [persistNote]
+  );
+
+  const openNoteInTab = useCallback(
+    (noteId: string, extraPatch?: Partial<WorkspacePreferences>) => {
+      setPrefs((prev) => {
+        const tabs = buildTabListWithActiveFallback(prev);
+        const nextTabs = tabs.includes(noteId) ? tabs : [...tabs, noteId];
+        const next: WorkspacePreferences = {
+          ...prev,
+          ...extraPatch,
+          openTabIds: nextTabs,
+          activeSection: 'editor',
+          activeNoteId: noteId,
+        };
+        persistPrefs(next, false);
+        return next;
+      });
+    },
+    [buildTabListWithActiveFallback, persistPrefs]
   );
 
   const handleCreateNote = useCallback(
@@ -807,13 +843,9 @@ export default function App() {
       };
       setNotes((prev) => [newNote, ...prev]);
       persistNote(newNote);
-      updatePrefs({
-        activeSection: 'editor',
-        activeNoteId: newNote.id,
-        activeFolderId: parentFolderId,
-      });
+      openNoteInTab(newNote.id, { activeFolderId: parentFolderId });
     },
-    [updatePrefs, persistNote]
+    [openNoteInTab, persistNote]
   );
 
   const handleDuplicateNote = useCallback(
@@ -829,9 +861,26 @@ export default function App() {
       };
       setNotes((prev) => [copy, ...prev]);
       persistNote(copy);
-      updatePrefs({ activeSection: 'editor', activeNoteId: copy.id });
+      setPrefs((prev) => {
+        const tabs = buildTabListWithActiveFallback(prev);
+        const srcIdx = tabs.indexOf(source.id);
+        const nextTabs = [...tabs];
+        if (srcIdx >= 0) {
+          nextTabs.splice(srcIdx + 1, 0, copy.id);
+        } else {
+          nextTabs.push(copy.id);
+        }
+        const next: WorkspacePreferences = {
+          ...prev,
+          openTabIds: nextTabs,
+          activeSection: 'editor',
+          activeNoteId: copy.id,
+        };
+        persistPrefs(next, false);
+        return next;
+      });
     },
-    [updatePrefs, persistNote]
+    [buildTabListWithActiveFallback, persistNote, persistPrefs]
   );
 
   const showTrashUndoToast = useCallback((noteId: string, title: string) => {
@@ -846,7 +895,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const timers = saveTimersRef.current;
     return () => {
+      timers.forEach((id) => window.clearTimeout(id));
+      timers.clear();
       if (trashToastTimerRef.current) {
         window.clearTimeout(trashToastTimerRef.current);
       }
@@ -863,10 +915,13 @@ export default function App() {
         return;
       }
 
-      if (saveTimerRef.current) {
-        window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-        setSaveState('saved');
+      const pendingTimer = saveTimersRef.current.get(noteId);
+      if (pendingTimer) {
+        window.clearTimeout(pendingTimer);
+        saveTimersRef.current.delete(noteId);
+        if (saveTimersRef.current.size === 0) {
+          setSaveState('saved');
+        }
       }
 
       const now = new Date().toISOString();
@@ -880,12 +935,34 @@ export default function App() {
       setNotes((prev) => prev.map((n) => (n.id === noteId ? trashedNote : n)));
       persistNote(trashedNote);
 
-      if (prefs.activeNoteId === noteId) {
-        updatePrefs({ activeNoteId: null, activeSection: 'all_notes' });
-      }
+      setPrefs((prev) => {
+        const tabs = buildTabListWithActiveFallback(prev);
+        const closedIdx = tabs.indexOf(noteId);
+        const nextTabs = tabs.filter((id) => id !== noteId);
+        const wasActive = prev.activeNoteId === noteId;
+        if (!wasActive && closedIdx === -1) return prev;
+
+        const nextActiveId = wasActive
+          ? nextTabs[closedIdx] ?? nextTabs[closedIdx - 1] ?? null
+          : prev.activeNoteId;
+        const nextSection: WorkspaceSection = wasActive
+          ? nextActiveId
+            ? 'editor'
+            : 'all_notes'
+          : prev.activeSection;
+
+        const next: WorkspacePreferences = {
+          ...prev,
+          openTabIds: nextTabs,
+          activeNoteId: nextActiveId,
+          activeSection: nextSection,
+        };
+        persistPrefs(next, false);
+        return next;
+      });
       showTrashUndoToast(trashedNote.id, trashedNote.title || 'Untitled');
     },
-    [notes, prefs.activeNoteId, updatePrefs, persistNote, showTrashUndoToast]
+    [notes, buildTabListWithActiveFallback, persistNote, persistPrefs, showTrashUndoToast]
   );
 
   const handleRestoreNote = useCallback(
@@ -924,9 +1001,119 @@ export default function App() {
 
   const handleSelectNote = useCallback(
     (noteId: string) => {
+      openNoteInTab(noteId);
+    },
+    [openNoteInTab]
+  );
+
+  const handleActivateTab = useCallback(
+    (noteId: string) => {
       updatePrefs({ activeSection: 'editor', activeNoteId: noteId });
     },
     [updatePrefs]
+  );
+
+  const handleCloseTab = useCallback(
+    (noteId: string) => {
+      setPrefs((prev) => {
+        const tabs = buildTabListWithActiveFallback(prev);
+        const closedIdx = tabs.indexOf(noteId);
+        if (closedIdx === -1) return prev;
+        const nextTabs = tabs.filter((id) => id !== noteId);
+        const closingActive = prev.activeSection === 'editor' && prev.activeNoteId === noteId;
+        const nextActiveId = closingActive
+          ? nextTabs[closedIdx] ?? nextTabs[closedIdx - 1] ?? null
+          : prev.activeNoteId;
+        const nextSection: WorkspaceSection = closingActive
+          ? nextActiveId
+            ? 'editor'
+            : 'all_notes'
+          : prev.activeSection;
+
+        const next: WorkspacePreferences = {
+          ...prev,
+          openTabIds: nextTabs,
+          activeNoteId: nextActiveId,
+          activeSection: nextSection,
+        };
+        persistPrefs(next, false);
+        return next;
+      });
+    },
+    [buildTabListWithActiveFallback, persistPrefs]
+  );
+
+  const handleCloseOtherTabs = useCallback(
+    (keepNoteId: string) => {
+      setPrefs((prev) => {
+        const next: WorkspacePreferences = {
+          ...prev,
+          openTabIds: [keepNoteId],
+          activeNoteId: keepNoteId,
+          activeSection: 'editor',
+        };
+        persistPrefs(next, false);
+        return next;
+      });
+    },
+    [persistPrefs]
+  );
+
+  const handleCloseTabsToRight = useCallback(
+    (noteId: string) => {
+      setPrefs((prev) => {
+        const tabs = buildTabListWithActiveFallback(prev);
+        const idx = tabs.indexOf(noteId);
+        if (idx === -1) return prev;
+        const nextTabs = tabs.slice(0, idx + 1);
+        const activeStillOpen = Boolean(prev.activeNoteId && nextTabs.includes(prev.activeNoteId));
+        const nextActiveId =
+          prev.activeSection === 'editor' && !activeStillOpen ? noteId : prev.activeNoteId;
+        const next: WorkspacePreferences = {
+          ...prev,
+          openTabIds: nextTabs,
+          activeNoteId: nextActiveId,
+        };
+        persistPrefs(next, false);
+        return next;
+      });
+    },
+    [buildTabListWithActiveFallback, persistPrefs]
+  );
+
+  const handleCloseAllTabs = useCallback(() => {
+    setPrefs((prev) => {
+      const next: WorkspacePreferences = {
+        ...prev,
+        openTabIds: [],
+        activeNoteId: null,
+        activeSection: prev.activeSection === 'editor' ? 'all_notes' : prev.activeSection,
+      };
+      persistPrefs(next, false);
+      return next;
+    });
+  }, [persistPrefs]);
+
+  const handleReorderTabs = useCallback(
+    (draggedId: string, targetId: string) => {
+      if (draggedId === targetId) return;
+      setPrefs((prev) => {
+        const tabs = buildTabListWithActiveFallback(prev);
+        const fromIdx = tabs.indexOf(draggedId);
+        const toIdx = tabs.indexOf(targetId);
+        if (fromIdx === -1 || toIdx === -1) return prev;
+        const nextTabs = [...tabs];
+        const [moved] = nextTabs.splice(fromIdx, 1);
+        nextTabs.splice(toIdx, 0, moved);
+        const next: WorkspacePreferences = {
+          ...prev,
+          openTabIds: nextTabs,
+        };
+        persistPrefs(next, false);
+        return next;
+      });
+    },
+    [buildTabListWithActiveFallback, persistPrefs]
   );
 
   const handleSelectFolder = useCallback(
@@ -948,7 +1135,7 @@ export default function App() {
           (n) => !n.isArchived && !n.deletedAt && n.journalDate === dateKey
         );
         if (existing) {
-          updatePrefs({ activeSection: 'editor', activeNoteId: existing.id });
+          openNoteInTab(existing.id);
           return;
         }
       }
@@ -987,9 +1174,9 @@ export default function App() {
       };
       setNotes((prev) => [newEntry, ...prev]);
       persistNote(newEntry);
-      updatePrefs({ activeSection: 'editor', activeNoteId: newEntry.id });
+      openNoteInTab(newEntry.id);
     },
-    [notes, folders, prefs.calendarLocale, updatePrefs, persistNote]
+    [notes, folders, prefs.calendarLocale, openNoteInTab, persistNote]
   );
 
   // Folder CRUD
@@ -1102,8 +1289,28 @@ export default function App() {
         });
         setFolders((prev) => prev.filter((f) => !toDeleteIds.has(f.id)));
         setNotes(nextNotes);
-        if (prefs.activeNoteId && affectedNoteIds.has(prefs.activeNoteId)) {
-          updatePrefs({ activeNoteId: null, activeSection: 'dashboard' });
+        if (affectedNoteIds.size > 0) {
+          setPrefs((prev) => {
+            const tabs = buildTabListWithActiveFallback(prev);
+            const nextTabs = tabs.filter((id) => !affectedNoteIds.has(id));
+            const wasActiveAffected = Boolean(
+              prev.activeNoteId && affectedNoteIds.has(prev.activeNoteId)
+            );
+            const nextActiveId = wasActiveAffected ? nextTabs[0] ?? null : prev.activeNoteId;
+            const nextSection: WorkspaceSection = wasActiveAffected
+              ? nextActiveId
+                ? 'editor'
+                : 'dashboard'
+              : prev.activeSection;
+            const next: WorkspacePreferences = {
+              ...prev,
+              openTabIds: nextTabs,
+              activeNoteId: nextActiveId,
+              activeSection: nextSection,
+            };
+            persistPrefs(next, false);
+            return next;
+          });
         }
       }
 
@@ -1115,10 +1322,11 @@ export default function App() {
       folders,
       notes,
       prefs.activeFolderId,
-      prefs.activeNoteId,
+      buildTabListWithActiveFallback,
       updatePrefs,
       persistFolder,
       persistNote,
+      persistPrefs,
       removeFolder,
     ]
   );
@@ -1297,6 +1505,25 @@ export default function App() {
     () => notes.find((n) => n.id === prefs.activeNoteId && !n.deletedAt) || null,
     [notes, prefs.activeNoteId]
   );
+
+  const openTabNotes = useMemo(() => {
+    const activeById = new Map<string, Note>();
+    for (const n of notes) {
+      if (!n.deletedAt) activeById.set(n.id, n);
+    }
+    const rawIds = buildTabListWithActiveFallback(prefs);
+    const seen = new Set<string>();
+    const resolved: Note[] = [];
+    for (const id of rawIds) {
+      if (seen.has(id)) continue;
+      const note = activeById.get(id);
+      if (note) {
+        seen.add(id);
+        resolved.push(note);
+      }
+    }
+    return resolved;
+  }, [notes, prefs, buildTabListWithActiveFallback]);
 
   const activeFolder = useMemo(
     () => folders.find((f) => f.id === prefs.activeFolderId) || null,
@@ -1555,6 +1782,24 @@ export default function App() {
               Save to Drive
             </button>
           </div>
+        )}
+        {openTabNotes.length > 0 && (
+          <NoteTabBar
+            tabs={openTabNotes}
+            activeNoteId={prefs.activeNoteId}
+            isEditorActive={prefs.activeSection === 'editor'}
+            leftSidebarCollapsed={prefs.leftSidebarCollapsed}
+            onActivateTab={handleActivateTab}
+            onCloseTab={handleCloseTab}
+            onCloseOtherTabs={handleCloseOtherTabs}
+            onCloseTabsToRight={handleCloseTabsToRight}
+            onCloseAllTabs={handleCloseAllTabs}
+            onCreateNewTab={() =>
+              handleCreateNote(prefs.activeSection === 'folder' ? prefs.activeFolderId : null)
+            }
+            onDuplicateNote={handleDuplicateNote}
+            onReorderTabs={handleReorderTabs}
+          />
         )}
         <div className="min-h-0 flex-1 overflow-hidden">
         {prefs.activeSection === 'editor' && activeNote ? (

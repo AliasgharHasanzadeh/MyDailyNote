@@ -193,6 +193,15 @@ html.theme-pink ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
 }
 
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* TipTap / ProseMirror Rich Document Styling */
 .vellum-editor .ProseMirror {
   outline: none;

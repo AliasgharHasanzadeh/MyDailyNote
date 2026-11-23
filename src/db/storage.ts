@@ -155,11 +155,17 @@ export const db = {
     const existing = await getFromStore<WorkspacePreferences>(STORES.preferences, 'default');
     if (existing) {
       const validThemes = new Set(['light', 'dark', 'cybery', 'pink']);
+      const normalizedTabs = Array.isArray(existing.openTabIds)
+        ? existing.openTabIds
+        : existing.activeNoteId
+          ? [existing.activeNoteId]
+          : [];
       return {
         ...existing,
         theme: validThemes.has(existing.theme) ? existing.theme : 'dark',
         calendarLocale: existing.calendarLocale || 'en',
         leftSidebarWidth: existing.leftSidebarWidth || 272,
+        openTabIds: normalizedTabs,
       };
     }
     const defaults: WorkspacePreferences = {
@@ -175,6 +181,7 @@ export const db = {
       activeNoteId: null,
       activeSection: 'dashboard',
       activeFolderId: null,
+      openTabIds: [],
     };
     await putInStore(STORES.preferences, defaults);
     return defaults;
