@@ -7,9 +7,15 @@ interface SlashMenuProps {
   editor: Editor | null;
   onRequestMedia: (kind: MediaKind, rangeToDelete?: { from: number; to: number }) => void;
   onRequestLink: (rangeToDelete?: { from: number; to: number }) => void;
+  onRequestConvertMarkup: (rangeToDelete?: { from: number; to: number }) => void;
 }
 
-export function SlashMenu({ editor, onRequestMedia, onRequestLink }: SlashMenuProps) {
+export function SlashMenu({
+  editor,
+  onRequestMedia,
+  onRequestLink,
+  onRequestConvertMarkup,
+}: SlashMenuProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -84,6 +90,12 @@ export function SlashMenu({ editor, onRequestMedia, onRequestLink }: SlashMenuPr
       const currentRange = { ...range };
       setOpen(false);
       onRequestLink(currentRange);
+      return;
+    }
+    if (cmd.actionKind === 'convert_markup') {
+      const currentRange = { ...range };
+      setOpen(false);
+      onRequestConvertMarkup(currentRange);
       return;
     }
     editor.chain().focus().deleteRange(range).run();

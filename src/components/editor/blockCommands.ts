@@ -2,6 +2,7 @@ import type { Editor } from '@tiptap/react';
 import {
   CheckSquare,
   Code2,
+  FileCode2,
   FileUp,
   Heading1,
   Heading2,
@@ -15,6 +16,8 @@ import {
   Music,
   Pilcrow,
   Quote,
+  Sparkles,
+  Table as TableIcon,
   Terminal,
   Video,
 } from 'lucide-react';
@@ -22,7 +25,7 @@ import type { LucideIcon } from 'lucide-react';
 
 export type MediaKind = 'image' | 'audio' | 'video' | 'file';
 export type BlockCategory = 'typography' | 'dev' | 'attachment';
-export type BlockActionKind = 'link';
+export type BlockActionKind = 'link' | 'convert_markup';
 
 export const BLOCK_CATEGORY_META: ReadonlyArray<{
   id: BlockCategory;
@@ -166,6 +169,18 @@ export const BLOCK_COMMANDS: BlockCommandItem[] = [
     execute: (editor, pos) =>
       insertOrReplaceAt(editor, pos, () => editor.chain().focus().setHorizontalRule().run()),
   },
+  {
+    id: 'table',
+    category: 'typography',
+    label: 'Table',
+    description: 'Seamless inline table supporting text & images',
+    keywords: ['table', 'grid', 'rows', 'columns', 'tr', 'td', 'typography'],
+    icon: TableIcon,
+    execute: (editor, pos) =>
+      insertOrReplaceAt(editor, pos, () =>
+        editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+      ),
+  },
 
   // Dev
   {
@@ -193,6 +208,32 @@ export const BLOCK_COMMANDS: BlockCommandItem[] = [
           .insertContent([{ type: 'terminalBlock' }, { type: 'paragraph' }])
           .run()
       ),
+  },
+  {
+    id: 'html_block',
+    category: 'dev',
+    label: 'HTML Block',
+    description: 'Custom HTML sandbox box with live preview',
+    keywords: ['html', 'sandbox', 'embed', 'card', 'layout', 'dev'],
+    icon: FileCode2,
+    execute: (editor, pos) =>
+      insertOrReplaceAt(editor, pos, () =>
+        editor
+          .chain()
+          .focus()
+          .insertContent([{ type: 'htmlBlock' }, { type: 'paragraph' }])
+          .run()
+      ),
+  },
+  {
+    id: 'convert_markup',
+    category: 'dev',
+    label: 'Convert HTML / MD',
+    description: 'Turn HTML or Markdown directly into page text & tables',
+    keywords: ['convert', 'html', 'markdown', 'md', 'import', 'table', 'paste', 'dev'],
+    icon: Sparkles,
+    actionKind: 'convert_markup',
+    execute: () => {},
   },
 
   // Attachment

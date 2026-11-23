@@ -1,4 +1,5 @@
 import Placeholder from '@tiptap/extension-placeholder';
+import { TableKit } from '@tiptap/extension-table';
 import TaskItem from '@tiptap/extension-task-item';
 import TaskList from '@tiptap/extension-task-list';
 import { EditorContent, useEditor } from '@tiptap/react';
@@ -35,7 +36,9 @@ import {
   Quote,
   Redo2,
   Smile,
+  Sparkles,
   Star,
+  Table as TableIcon,
   Trash2,
   Undo2,
   Upload,
@@ -62,14 +65,22 @@ import { BlockGutter } from './BlockGutter';
 import { AudioNode } from './extensions/AudioNode';
 import { CalloutNode } from './extensions/CalloutNode';
 import { FileAttachmentNode } from './extensions/FileAttachmentNode';
+import { HtmlBlockNode } from './extensions/HtmlBlockNode';
 import { MediaImageNode } from './extensions/MediaImageNode';
+import {
+  InlineStyleMark,
+  SafeStyleExtension,
+  StyledBoxNode,
+} from './extensions/SafeStyleExtension';
 import { TerminalNode } from './extensions/TerminalNode';
+import { TextColorMark } from './extensions/TextColorMark';
 import {
   TextDirectionExtension,
   getActiveBlockDirection,
 } from './extensions/TextDirectionExtension';
 import { useResolvedCoverUrl } from './extensions/useMediaUrl';
 import { VideoNode } from './extensions/VideoNode';
+import { HtmlMarkdownConvertDialog } from './HtmlMarkdownConvertDialog';
 import { LinkHoverPopover } from './LinkHoverPopover';
 import { LinkInsertDialog } from './LinkInsertDialog';
 import { MediaInsertDialog } from './MediaInsertDialog';
@@ -203,6 +214,10 @@ function NoteEditorCanvas({
     rangeToDelete?: { from: number; to: number };
     insertPos?: number;
   } | null>(null);
+  const [convertDialog, setConvertDialog] = useState<{
+    rangeToDelete?: { from: number; to: number };
+    insertPos?: number;
+  } | null>(null);
   const [pendingCoverFile, setPendingCoverFile] = useState<File | null>(null);
   const [uploadingCover, setUploadingCover] = useState(false);
 
@@ -221,22 +236,32 @@ function NoteEditorCanvas({
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
-        heading: { levels: [1, 2, 3] },
+        heading: { levels: [1, 2, 3, 4, 5, 6] },
         link: { openOnClick: false, autolink: true },
         dropcursor: { color: 'var(--accent)', width: 2 },
       }),
       TaskList,
       TaskItem.configure({ nested: true }),
+      TableKit.configure({
+        table: {
+          resizable: true,
+        },
+      }),
       Placeholder.configure({
         placeholder: 'Write freely, or type "/" to insert blocks...',
       }),
       CalloutNode,
       TerminalNode,
+      HtmlBlockNode,
+      TextColorMark,
+      InlineStyleMark,
       TextDirectionExtension,
       MediaImageNode,
       AudioNode,
       VideoNode,
       FileAttachmentNode,
+      StyledBoxNode,
+      SafeStyleExtension,
     ],
     content: note.content,
     onUpdate: ({ editor: ed }) => {
@@ -298,26 +323,27 @@ function NoteEditorCanvas({
       file: 'fileAttachment',
     };
     const type = nodeTypeMap[mediaDialog.kind];
+    const insideTableCell =
+      editor.isActive('tableCell') || editor.isActive('tableHeader');
+    const nodesToInsert = insideTableCell
+      ? [{ type, attrs }]
+      : [{ type, attrs }, { type: 'paragraph' }];
 
     if (mediaDialog.rangeToDelete) {
       editor
         .chain()
         .focus()
         .deleteRange(mediaDialog.rangeToDelete)
-        .insertContent([{ type, attrs }, { type: 'paragraph' }])
+        .insertContent(nodesToInsert)
         .run();
     } else if (typeof mediaDialog.insertPos === 'number') {
       editor
         .chain()
         .focus()
-        .insertContentAt(mediaDialog.insertPos, [{ type, attrs }, { type: 'paragraph' }])
+        .insertContentAt(mediaDialog.insertPos, nodesToInsert)
         .run();
     } else {
-      editor
-        .chain()
-        .focus()
-        .insertContent([{ type, attrs }, { type: 'paragraph' }])
-        .run();
+      editor.chain().focus().insertContent(nodesToInsert).run();
     }
     setMediaDialog(null);
   };
@@ -387,7 +413,32 @@ function NoteEditorCanvas({
       openLinkDialog();
       return;
     }
+    if (cmd.actionKind === 'convert_markup') {
+      setConvertDialog({});
+      return;
+    }
     cmd.execute(editor);
+  };
+
+  const handleConvertMarkupInsert = (safeHtml: string) => {
+    if (!editor || !convertDialog) return;
+    if (convertDialog.rangeToDelete) {
+      editor
+        .chain()
+        .focus()
+        .deleteRange(convertDialog.rangeToDelete)
+        .insertContent(safeHtml)
+        .run();
+    } else if (typeof convertDialog.insertPos === 'number') {
+      editor
+        .chain()
+        .focus()
+        .insertContentAt(convertDialog.insertPos, safeHtml)
+        .run();
+    } else {
+      editor.chain().focus().insertContent(safeHtml).run();
+    }
+    setConvertDialog(null);
   };
 
   const commitCoverDataUrl = (file: File) => {
@@ -963,6 +1014,20 @@ function NoteEditorCanvas({
               title="Divider"
               icon={<Minus className="h-3.5 w-3.5" />}
             />
+            <ToolbarIconBtn
+              active={editor.isActive('table')}
+              onClick={() =>
+                editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+              }
+              title="Insert Table"
+              icon={<TableIcon className="h-3.5 w-3.5" />}
+            />
+            <ToolbarIconBtn
+              active={false}
+              onClick={() => setConvertDialog({})}
+              title="Convert HTML / Markdown into Page"
+              icon={<Sparkles className="h-3.5 w-3.5" />}
+            />
 
             <div className="mx-1.5 h-4 w-px bg-[var(--border-subtle)]" />
 
@@ -1032,6 +1097,73 @@ function NoteEditorCanvas({
               icon={<FileUp className="h-3.5 w-3.5" />}
             />
           </div>
+        </div>
+      )}
+
+      {/* Contextual Table Controls Bar (appears only when cursor is inside a table) */}
+      {editor && editor.isActive('table') && (
+        <div className="flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/70 px-4 py-1 text-[11px] lg:px-6">
+          <span className="font-medium text-[var(--text-muted)] mr-1 whitespace-nowrap">
+            Table:
+          </span>
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().addRowAfter().run()}
+            className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-0.5 font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer whitespace-nowrap"
+          >
+            + Row
+          </button>
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().addColumnAfter().run()}
+            className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-0.5 font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer whitespace-nowrap"
+          >
+            + Column
+          </button>
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().deleteRow().run()}
+            className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-0.5 font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer whitespace-nowrap"
+          >
+            - Row
+          </button>
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().deleteColumn().run()}
+            className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-0.5 font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer whitespace-nowrap"
+          >
+            - Column
+          </button>
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleHeaderRow().run()}
+            className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-0.5 font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer whitespace-nowrap"
+          >
+            Header Row
+          </button>
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().mergeOrSplit().run()}
+            disabled={!editor.can().mergeOrSplit()}
+            className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-surface)] px-2 py-0.5 font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-40 cursor-pointer whitespace-nowrap"
+          >
+            Merge / Split
+          </button>
+          <button
+            type="button"
+            onClick={() => setMediaDialog({ kind: 'image' })}
+            className="inline-flex items-center gap-1 rounded-md border border-[var(--accent)]/40 bg-[var(--accent-soft)] px-2 py-0.5 font-medium text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white cursor-pointer whitespace-nowrap"
+          >
+            <ImageIcon className="h-3 w-3" />
+            Image in cell
+          </button>
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().deleteTable().run()}
+            className="ml-auto rounded-md px-2 py-0.5 font-medium text-red-500 hover:bg-red-500/10 cursor-pointer whitespace-nowrap"
+          >
+            Delete table
+          </button>
         </div>
       )}
 
@@ -1467,6 +1599,7 @@ function NoteEditorCanvas({
                 setMediaDialog({ kind, insertPos })
               }
               onRequestLinkAtPos={(insertPos) => openLinkDialog({ insertPos })}
+              onRequestConvertMarkupAtPos={(insertPos) => setConvertDialog({ insertPos })}
             />
             <EditorContent editor={editor} />
           </div>
@@ -1481,6 +1614,7 @@ function NoteEditorCanvas({
           setMediaDialog({ kind, rangeToDelete })
         }
         onRequestLink={(rangeToDelete) => openLinkDialog({ rangeToDelete })}
+        onRequestConvertMarkup={(rangeToDelete) => setConvertDialog({ rangeToDelete })}
       />
 
       {mediaDialog && (
@@ -1497,6 +1631,13 @@ function NoteEditorCanvas({
           initialUrl={linkDialog.initialUrl}
           onClose={() => setLinkDialog(null)}
           onInsert={handleLinkInsert}
+        />
+      )}
+
+      {convertDialog && (
+        <HtmlMarkdownConvertDialog
+          onClose={() => setConvertDialog(null)}
+          onConvertAndInsert={handleConvertMarkupInsert}
         />
       )}
 

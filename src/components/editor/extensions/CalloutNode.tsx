@@ -3,23 +3,27 @@ import { NodeViewContent, NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap
 import type { NodeViewProps } from '@tiptap/react';
 import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
+import { detectStrongDirection } from './TextDirectionExtension';
 
 const CALLOUT_EMOJIS = ['💡', '📌', '📝', '✨', '⚠️', '🧭', '🎯', '🌿', '🔍', '💬'];
 
 function CalloutView({ node, updateAttributes, deleteNode }: NodeViewProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const emoji = (node.attrs.emoji as string) || '💡';
-  const dirAttr =
+  const explicitDir =
     node.attrs.dir === 'rtl' || node.attrs.dir === 'ltr'
       ? (node.attrs.dir as 'rtl' | 'ltr')
       : undefined;
+  const autoDir = !explicitDir ? detectStrongDirection(node.textContent || '') : undefined;
+  const effectiveDir = explicitDir || autoDir || undefined;
 
   return (
     <NodeViewWrapper
       className="group relative my-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3.5 transition-colors"
       data-type="callout"
-      dir={dirAttr}
-      data-explicit-dir={dirAttr}
+      dir={effectiveDir}
+      data-explicit-dir={explicitDir}
+      data-auto-dir={autoDir || undefined}
     >
       <div className="flex items-start gap-3">
         <div className="relative shrink-0 pt-0.5" contentEditable={false}>

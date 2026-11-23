@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { deleteDriveFile } from '../../../db/googleDrive';
 import { getDriveAccessToken } from '../../../googleAuth';
 import { DriveConfirmDeleteModal } from '../../DriveConfirmDeleteModal';
+import { isSafeHttpOrImageUrl } from '../../../utils/htmlMarkdownImport';
 import { useMediaUrl } from './useMediaUrl';
 
 function ImageBlockView({ node, updateAttributes, deleteNode, selected }: NodeViewProps) {
@@ -191,7 +192,22 @@ export const MediaImageNode = Node.create({
   },
 
   parseHTML() {
-    return [{ tag: 'div[data-type="mediaImage"]' }];
+    return [
+      { tag: 'div[data-type="mediaImage"]' },
+      {
+        tag: 'img[src]',
+        getAttrs: (element) => {
+          const el = element as HTMLImageElement;
+          const src = (el.getAttribute('src') || '').trim();
+          if (!isSafeHttpOrImageUrl(src, false)) return false;
+          return {
+            src,
+            caption: el.getAttribute('alt') || '',
+            width: 'standard',
+          };
+        },
+      },
+    ];
   },
 
   renderHTML({ HTMLAttributes }) {

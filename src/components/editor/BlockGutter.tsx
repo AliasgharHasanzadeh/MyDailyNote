@@ -9,6 +9,7 @@ interface BlockGutterProps {
   containerRef: React.RefObject<HTMLDivElement | null>;
   onRequestMediaAtPos: (kind: MediaKind, insertPos: number) => void;
   onRequestLinkAtPos: (insertPos: number) => void;
+  onRequestConvertMarkupAtPos: (insertPos: number) => void;
 }
 
 interface HoveredBlock {
@@ -23,6 +24,7 @@ export function BlockGutter({
   containerRef,
   onRequestMediaAtPos,
   onRequestLinkAtPos,
+  onRequestConvertMarkupAtPos,
 }: BlockGutterProps) {
   const [hovered, setHovered] = useState<HoveredBlock | null>(null);
   const [insertMenuOpen, setInsertMenuOpen] = useState(false);
@@ -203,6 +205,11 @@ export function BlockGutter({
 
     if (cmd.actionKind === 'link') {
       onRequestLinkAtPos(insertPos);
+      return;
+    }
+
+    if (cmd.actionKind === 'convert_markup') {
+      onRequestConvertMarkupAtPos(insertPos);
       return;
     }
 

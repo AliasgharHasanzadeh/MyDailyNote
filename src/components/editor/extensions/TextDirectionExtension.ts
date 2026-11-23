@@ -1,5 +1,7 @@
 import { Extension } from '@tiptap/core';
 import type { Editor } from '@tiptap/core';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
 export type TextDirectionValue = 'rtl' | 'ltr' | 'auto';
 
@@ -13,10 +15,25 @@ const DIRECTION_NODE_TYPES = [
   'taskList',
   'taskItem',
   'callout',
+  'tableCell',
+  'tableHeader',
 ];
 
 const LIST_CONTAINER_TYPES = new Set(['bulletList', 'orderedList', 'taskList']);
 const LIST_ITEM_TYPES = new Set(['listItem', 'taskItem']);
+
+// Matches the first strong RTL (Arabic/Persian/Hebrew) or LTR (Latin) character
+const RTL_CHAR_RE = /[\u0591-\u07FF\u200F\uFB1D-\uFDFD\uFE70-\uFEFC]/;
+const LTR_CHAR_RE = /[A-Za-z\u00C0-\u024F\u1E00-\u1EFF]/;
+
+export function detectStrongDirection(text: string): 'rtl' | 'ltr' | null {
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (RTL_CHAR_RE.test(ch)) return 'rtl';
+    if (LTR_CHAR_RE.test(ch)) return 'ltr';
+  }
+  return null;
+}
 
 declare module '@tiptap/core' {
   interface Commands<ReturnType> {
@@ -41,6 +58,8 @@ export function getActiveBlockDirection(editor: Editor | null): 'rtl' | 'ltr' | 
   }
   return null;
 }
+
+const autoDirectionPluginKey = new PluginKey('autoTextDirection');
 
 export const TextDirectionExtension = Extension.create({
   name: 'textDirection',
@@ -70,6 +89,38 @@ export const TextDirectionExtension = Extension.create({
           },
         },
       },
+    ];
+  },
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: autoDirectionPluginKey,
+        props: {
+          decorations(state) {
+            const decorations: Decoration[] = [];
+            state.doc.descendants((node, pos) => {
+              if (!DIRECTION_NODE_TYPES.includes(node.type.name)) {
+                return true;
+              }
+              if (node.attrs?.dir === 'rtl' || node.attrs?.dir === 'ltr') {
+                return true;
+              }
+              const detected = detectStrongDirection(node.textContent || '');
+              if (detected) {
+                decorations.push(
+                  Decoration.node(pos, pos + node.nodeSize, {
+                    dir: detected,
+                    'data-auto-dir': detected,
+                  })
+                );
+              }
+              return true;
+            });
+            return DecorationSet.create(state.doc, decorations);
+          },
+        },
+      }),
     ];
   },
 

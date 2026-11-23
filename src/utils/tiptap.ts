@@ -37,6 +37,14 @@ export function extractPlainText(node: JSONContent | undefined | null): string {
       }
       parts.push('\n');
     }
+    if (n.type === 'htmlBlock') {
+      if (n.attrs?.title) parts.push(String(n.attrs.title));
+      if (typeof n.attrs?.html === 'string') {
+        const stripped = n.attrs.html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (stripped) parts.push(`\n${stripped}`);
+      }
+      parts.push('\n');
+    }
     if (Array.isArray(n.content)) {
       for (const child of n.content) {
         walk(child);
@@ -47,9 +55,12 @@ export function extractPlainText(node: JSONContent | undefined | null): string {
         n.type === 'blockquote' ||
         n.type === 'listItem' ||
         n.type === 'taskItem' ||
-        n.type === 'codeBlock'
+        n.type === 'codeBlock' ||
+        n.type === 'tableRow'
       ) {
         parts.push('\n');
+      } else if (n.type === 'tableCell' || n.type === 'tableHeader') {
+        parts.push(' ');
       }
     }
   };
@@ -179,6 +190,32 @@ export function noteToMarkdown(note: Note): string {
           .map((e) => `${prompt} ${e.command || ''}${e.output ? `\n${e.output}` : ''}`)
           .join('\n');
         return `\`\`\`bash\n${body}\n\`\`\``;
+      }
+      case 'htmlBlock': {
+        const code = typeof node.attrs?.html === 'string' ? node.attrs.html : '';
+        return `\`\`\`html\n${code}\n\`\`\``;
+      }
+      case 'table': {
+        const rows = node.content || [];
+        const renderedRows = rows.map((row) =>
+          (row.content || [])
+            .map((cell) =>
+              (cell.content || [])
+                .map((c) => serializeNode(c))
+                .join(' ')
+                .replace(/\n+/g, ' ')
+                .replace(/\|/g, '\\|')
+                .trim()
+            )
+        );
+        if (renderedRows.length === 0) return '';
+        const colCount = Math.max(...renderedRows.map((r) => r.length), 1);
+        const padRow = (r: string[]) =>
+          `| ${Array.from({ length: colCount }, (_, idx) => r[idx] || '').join(' | ')} |`;
+        const header = padRow(renderedRows[0]);
+        const sep = `| ${Array.from({ length: colCount }, () => '---').join(' | ')} |`;
+        const body = renderedRows.slice(1).map(padRow);
+        return [header, sep, ...body].join('\n');
       }
       default:
         return childrenText();
